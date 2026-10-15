@@ -4,6 +4,13 @@ Notable changes to this project. The format follows [Keep a Changelog](https://k
 entries link to the commit or pull request that made the change. The project has no numbered releases yet,
 so changes are grouped by date.
 
+## 2026-10-15
+
+### Changed
+
+- Renamed the project to **Job Application Assistant** (`job-application-assistant`) to emphasize its job application workflow.
+- Updated the English and Chinese introductions and clone instructions; RAG remains documented as an implementation detail.
+
 ## 2026-09-17
 
 ### Added

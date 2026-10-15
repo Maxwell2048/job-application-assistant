@@ -1,10 +1,10 @@
-# Job Evidence RAG
+# Job Application Assistant
 
 **English** | [简体中文](README.zh-CN.md)
 
-**A local job application assistant grounded in your own project experience.**
+**A local-first AI assistant for job screening, evidence-grounded resume tailoring, and interview preparation.**
 
-Turn a job description and a private experience library into an evidence-linked matching report, a preparation plan, CV suggestions, a cover letter, an assembled resume, and interview preparation.
+Screen a job description against your own project experience, trace each requirement to supporting evidence, and prepare a tailored resume, cover letter, and interview plan. The assistant keeps missing evidence separate from processing failures and checks generated quotations against the original sources.
 
 Built as a personal portfolio project with AI-assisted development (Claude Code and Codex as coding assistants; requirements, evidence curation, validation rules and acceptance by the author). The interface and reports are primarily in Chinese; source materials and job descriptions can contain Chinese or English.
 
@@ -54,7 +54,12 @@ Embedding runs on CPU. Generation memory and speed depend on the model and serve
 
 ## Quick start
 
-Download a reviewed source copy and open PowerShell in the directory containing this README:
+Clone the repository and open PowerShell in the project directory:
+
+```powershell
+git clone https://github.com/Maxwell2048/job-application-assistant.git
+cd job-application-assistant
+```
 
 ```powershell
 py -3.11 -m venv .venv

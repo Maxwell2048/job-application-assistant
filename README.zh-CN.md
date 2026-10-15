@@ -1,10 +1,10 @@
-# Job Evidence RAG
+# Job Application Assistant
 
 [English](README.md) | **简体中文**
 
-**一个立足于你自己项目证据的本地求职助手。**
+**本地优先的 AI 求职助手：岗位筛选、基于真实经历的简历定制与面试准备。**
 
-把一份招聘 JD 和一个私有的经历库，变成一份带证据链接的匹配报告、一份准备计划、CV 建议、Cover Letter、组装好的简历和面试准备。
+结合招聘 JD 和你的真实项目经历，逐条判断岗位要求、追溯支持证据，并准备定制简历、求职信和面试计划。系统区分“缺少证据”与“处理失败”，并检查生成内容中的引用是否出自原始材料。
 
 这是一个个人作品集项目，采用 AI 辅助开发（Claude Code 与 Codex 作为编码助手；需求、证据整理、校验规则和验收由作者负责）。界面与报告以中文为主；经历材料和 JD 可以是中文或英文。
 
@@ -54,7 +54,12 @@ flowchart TD
 
 ## 快速开始
 
-下载一份审核过的源码副本，在包含本 README 的目录打开 PowerShell：
+克隆仓库，并在项目目录打开 PowerShell：
+
+```powershell
+git clone https://github.com/Maxwell2048/job-application-assistant.git
+cd job-application-assistant
+```
 
 ```powershell
 py -3.11 -m venv .venv
