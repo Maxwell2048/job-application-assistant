@@ -212,12 +212,12 @@ def build(outputs_dir, site_dir):
                     f"<td>{html.escape(jd)}</td><td>{html.escape(str(meta.get('run_status')))}"
                     f"<span class=\"muted\"> {html.escape(str(meta.get('scope', '')))}</span></td>"
                     f"<td>{badges}</td><td>{' · '.join(links) or '—'}</td></tr>")
-    body = ("<h1>求职 RAG 运行记录</h1>"
+    body = ("<h1>求职申请助手 · 运行记录</h1>"
             "<p class=\"muted\">每次 match_job.py 运行一行；链接指向该运行目录里最新的一份文档。"
             "重新运行 build_site.py 即可刷新。</p>"
             "<table><thead><tr><th>时间</th><th>JD</th><th>状态</th><th>判断</th><th>文档</th></tr></thead>"
             f"<tbody>{''.join(rows) or '<tr><td colspan=5>outputs/ 里还没有运行记录</td></tr>'}</tbody></table>")
-    (site_dir / "index.html").write_text(page("求职 RAG 运行记录", body, '<span class="here">运行列表</span>'),
+    (site_dir / "index.html").write_text(page("求职申请助手 · 运行记录", body, '<span class="here">运行列表</span>'),
                                          encoding="utf-8")
     return len(runs)
 
