@@ -8,7 +8,7 @@ import re
 
 from local_llm import LLMError
 
-JUDGMENT_PROMPT_VERSION = "2"
+JUDGMENT_PROMPT_VERSION = "3"
 VERDICTS = ["direct", "related", "insufficient"]
 VERDICT_RANK = {"insufficient": 0, "related": 1, "direct": 2}
 
@@ -37,7 +37,8 @@ direct 必须覆盖要求及其重要限定条件；部分支持用 related；�
 10. 候选中的证据行是已有来源记录；可以提及，但不能声称本次已重新打开核查。
 11. reason 简短解释证据与要求的关系，不要求输出内部逐步思考过程；missing_aspects 列出未覆盖的重要条件；questions_for_user 列出可向用户确认的问题。
 12. requirement_id 必须等于本次给定的 requirement_id。
-13. 输出 direct 时 missing_aspects 必须为空；仍有未覆盖的重要条件时改用 related。"""
+13. 输出 direct 时 missing_aspects 必须为空；仍有未覆盖的重要条件时改用 related。
+14. profile.md 中已明确确认的基础 Windows 应用、办公软件使用及熟练度，是有效的本人自述事实；对使用者层面的基础要求可据此判为 direct 并逐字引用，不额外要求商业项目或证书，理由注明“本人自述”。仅有技能关键词仍不足以证明熟练度。普通 Windows/Office 使用不能覆盖 Windows Server、企业管理后台、专业运维或商业工作年限。"""
 
 JUDGMENT_SCHEMA = {
     "type": "object",
@@ -230,7 +231,13 @@ class EvidenceMatcher:
         except (ValueError, RuntimeError, OSError) as exc:
             return self._result(requirement, [], STATUS_ERROR, None,
                                 errors=[f"检索失败：{exc}"])
-        ranked = select_candidates(merge_candidates(per_query), self.top_k)
+        ranked = merge_candidates(per_query)
+        # Confirmed basic skills must reach the judge even when semantic search
+        # favours technical project sections; they are still quoted and judged.
+        profile_lookup = getattr(self.retriever, "basic_profile_candidates", None)
+        pinned = profile_lookup(requirement["text"]) if profile_lookup else []
+        pinned_ids = {r["section_id"] for r in pinned}
+        ranked = select_candidates(pinned + [r for r in ranked if r["section_id"] not in pinned_ids], self.top_k)
         entries = self._build_judge_entries(requirement, ranked)
         if not entries:
             return self._result(requirement, [], STATUS_ERROR, None,
@@ -294,8 +301,9 @@ class EvidenceMatcher:
             errors.append(f"verdict 为 {verdict} 但没有通过完整原文校验的引用")
             verdict, status = None, STATUS_ERROR
         if verdict == "direct" and missing:
-            # max(verdicts) 不能代替综合判断：direct 与未覆盖条件并存时
-            # 保守标记待复核，引用本身已按候选原文校验。
+            # max(verdicts) is not a combined judgment: when "direct" coexists with
+            # uncovered conditions, mark the requirement for review conservatively.
+            # The quotes themselves were already verified against the source text.
             requirement = {**requirement, "needs_review": True,
                            "review_notes": list(requirement.get("review_notes", [])) +
                            ["多批判断合并：direct 与未覆盖条件并存，需人工复核"]}
@@ -335,6 +343,7 @@ class EvidenceMatcher:
                     "candidate_id": f"E{counter:03d}",
                     "project": parent["project"],
                     "section": parent["section"],
+                    "evidence_type": "self_report" if is_profile_source(parent) else "project_evidence",
                     "text": piece,
                     "evidence_lines": parent.get("evidence", []),
                     "_parent": parent,

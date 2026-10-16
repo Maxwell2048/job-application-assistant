@@ -445,6 +445,15 @@ class ExtractRequirementsTests(unittest.TestCase):
                         long_jd.count("\n") + 1)
 
 
+class WhitespaceQuoteTests(unittest.TestCase):
+    def test_whitespace_only_quote_is_not_found_instead_of_crashing(self):
+        import jd_parser
+        # no run of three spaces in the text: the exact search finds nothing and the
+        # whitespace-normalised search used to index past the end of its offset map
+        self.assertIsNone(jd_parser.locate_quote("Python and SQL required.", "   "))
+        self.assertIsNone(jd_parser.locate_quote("Python and SQL required.", "\n\t"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

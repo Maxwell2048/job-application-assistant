@@ -464,7 +464,7 @@ class MatchJobCliTests(unittest.TestCase):
         meta = json.loads((run_dirs[0] / "run_meta.json").read_text(encoding="utf-8"))
         self.assertEqual(meta["run_status"], "complete")
         self.assertEqual(meta["scope"], "full")
-        self.assertEqual(meta["prompts"]["judgment"], "2")
+        self.assertEqual(meta["prompts"]["judgment"], "3")
         self.assertEqual(meta["models"]["generator"]["parameters"],
                          FAKE_GENERATION_PARAMETERS)
         self.assertEqual(meta["models"]["embedding"]["name"],
@@ -550,6 +550,16 @@ class MatchJobCliTests(unittest.TestCase):
         self.assertEqual(doc["scope"], "full")
         self.assertEqual(doc["errors"][0]["error_type"], "input")
         self.assertEqual(len(doc["requirements"]), 2)
+
+
+class FailureStatusTests(unittest.TestCase):
+    def test_an_exception_marks_the_run_failed_whatever_status_it_had(self):
+        import match_job
+        meta = {"errors": [], "run_status": "complete"}
+        code = match_job._fail(meta, "io", OSError("disk full"))
+        self.assertEqual(code, 1)
+        self.assertEqual(meta["run_status"], "failed")
+        self.assertEqual(meta["errors"], [{"error_type": "io", "message": "disk full"}])
 
 
 if __name__ == "__main__":
