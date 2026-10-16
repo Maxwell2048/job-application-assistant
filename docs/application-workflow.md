@@ -27,3 +27,5 @@ Archiving a job removes it from the active board and all active resume groups wi
 ## Validation limits
 
 Synthetic tests cover API workflows, per-version submission, archive filtering, search lanes, location evidence and document structure. They do not prove the semantics of every model answer, real-world application outcomes, pixel-identical office rendering, or production cloud operation. Use private data only on a trusted local deployment.
+
+Graceful shutdown waits for the active generation worker to finish its database writes before the application disposes its engine. An active generation can delay shutdown; forcefully terminating the process still relies on the existing restart-recovery workflow.

@@ -83,8 +83,16 @@ class Worker:
             self._thread.start()
 
     def stop(self):
+        """Stop taking work and finish the current task before releasing the DB.
+
+        Signalling alone leaves a race with the task's last database write.
+        Waiting also prevents a stopped worker from reopening a disposed pool.
+        Shutdown can therefore wait for an active generation to complete.
+        """
         self._stop.set()
         self._queue.put((-1, next(self._order), None, None))
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join()
 
     def _loop(self):
         while not self._stop.is_set():
