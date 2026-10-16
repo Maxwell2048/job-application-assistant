@@ -2,11 +2,11 @@
 
 [English](README.md) | **简体中文**
 
-**本地优先的 AI 求职助手：岗位筛选、基于真实经历的简历定制与面试准备。**
+**一个立足于你自己项目证据的本地求职助手。**
 
-结合招聘 JD 和你的真实项目经历，逐条判断岗位要求、追溯支持证据，并准备定制简历、求职信和面试计划。系统区分“缺少证据”与“处理失败”，并检查生成内容中的引用是否出自原始材料。
+把一份招聘 JD 和一个私有的经历库，变成一份带证据链接的匹配报告、一份准备计划、CV 建议、Cover Letter、组装好的简历和面试准备。
 
-这是一个个人作品集项目，采用 AI 辅助开发（Claude Code 与 Codex 作为编码助手；需求、证据整理、校验规则和验收由作者负责）。界面与报告以中文为主；经历材料和 JD 可以是中文或英文。
+由 Bomin Liao 开发与维护。界面与报告以中文为主；经历材料和 JD 可以是中文或英文。
 
 > 检索相似度不是录用概率。缺少证据不代表申请人不具备某项技能。生成的申请材料是供人工审阅的草稿。
 
@@ -19,7 +19,7 @@
 - 程序化校验 JSON 结构、要求 ID、候选 ID 和逐字引用。
 - 求职准备总结：优势、证据缺口、按优先级排列的补学练习和完成标准。
 - 带来源链接的 CV 建议、Cover Letter、简历组装、面试问题与 STAR 准备。
-- DOCX 导出、本地 Flask 网页界面、静态报告查看页面。
+- DOCX 导出、FastAPI + React 网页应用（含自动采集、筛选、排队新岗位的自动处理）和静态报告查看页面。
 
 ## 架构
 
@@ -54,12 +54,7 @@ flowchart TD
 
 ## 快速开始
 
-克隆仓库，并在项目目录打开 PowerShell：
-
-```powershell
-git clone https://github.com/Maxwell2048/job-application-assistant.git
-cd job-application-assistant
-```
+下载一份审核过的源码副本，在包含本 README 的目录打开 PowerShell：
 
 ```powershell
 py -3.11 -m venv .venv
@@ -124,17 +119,59 @@ Copy-Item project_template.md experiences\my_project.md
 
 `add_jd.py` 也可以从剪贴板、`--file` 或 `--stdin` 保存 JD。
 
-## 浏览器界面
+## 网页应用
 
-加入你自己的经历、简历和模型配置之后：
+流水线通过 FastAPI 后端和 React + TypeScript 前端提供。Windows 上一个启动器完成全部步骤：
 
 ```powershell
-.\.venv\Scripts\python.exe webapp.py --resume resume\base_resume.docx --config config.local.json
+.\start.bat
 ```
 
-打开 `http://127.0.0.1:5000`。页面按顺序调度各命令行阶段，一次只处理一个任务，显示进度、报告、历史记录和下载。运行中的任务可以中止；中止由粘贴 JD 发起的任务时，会一并删除未完成的运行目录和已保存的 JD 文件。面试准备默认不生成，之后可以在结果区或历史记录里为任何已完成的运行补生成。它只绑定本机回环地址，没有登录，只用于本机，不要公开托管。
+它会创建虚拟环境、首次构建前端（构建需要 Node 22；构建产物 `frontend/dist` 由后端直接服务）、执行数据库迁移，然后打开 `http://127.0.0.1:8000`。手动等价命令：
 
-`start.bat` 是针对原始配置的一键启动器，要求简历底稿使用固定文件名。文件名不同时请使用上面的显式命令。
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
+Push-Location frontend
+npm ci
+npm run build
+Pop-Location
+.\.venv\Scripts\python.exe -m backend.app.main        # 接口文档在 /docs
+```
+
+页面：按状态排列全部岗位的**看板**；**岗位页**显示筛选结论及其逐字原句、实时阶段进度、渲染后的文档和 Word 下载；**手动提交**粘贴的 JD；**自动处理**的状态和历史；**历史运行**；只读的**设置**。进度通过服务器推送事件到达。本地模型只有一个槽，因此一次只生成一份；运行中的任务可以中止，中止粘贴 JD 发起的任务会删除其未完成的运行目录和已保存的 JD 文件。面试准备默认关闭，可以事后为任何已完成的运行补上。
+
+### 自动处理与采集
+
+定时采集默认关闭；可在页面或命令行手动执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.autopilot tick --no-generate
+.\.venv\Scripts\python.exe -m backend.app.autopilot tick --mode broad --no-generate
+```
+
+SEEK 采集源码已包含在 `tools/seek_collector/`。`RAG_COLLECTOR_DIR` 指向已创建的**私人运行目录**，保存缓存、分页游标和采集结果，不再依赖另一份私有采集源码。需要 curl 传输适配时可选安装 `requirements-collector.txt`；也支持标准库回退。
+
+精准模式包含初级关键词和具体 IT 岗位搜索；广撒网增加珀斯 ICT 分类。全国远程岗位仍须有雇主原文明确支持从 WA 工作，不能凭地点标签或一个 remote 单词确认。普通 support、engineer、graduate 标题不能单独证明属于 IT。分页进度跨轮保存，失败页保留；遇到拒绝访问或限流停止，本工具不保证第三方网站可访问。
+
+只有包含雇主 JD 正文的结果才会导入。仅标题发现保留在私人采集输出，不占用看板；本次发布不会自动删除现有旧记录。合格岗位可等待人工选择，也可按已保存设置排队生成。手动跳过的岗位保持归档，不再进入活跃简历列表和计数。
+
+工作权利与匹配筛选结合模型、逐字引用和规则；处理失败独立记录。这些是辅助复核结果，不构成法律资格或录用概率判断。配置与行为见 [application workflow](docs/application-workflow.md)。
+
+### 简历投递与排版
+
+简历按生成日期整理，每个版本独立记录已投递／未投递；下载不代表已投递。归档岗位不出现在活跃分组，报告与投递历史保留。岗位 API 支持分页且前端读取全部页面；运行摘要独立携带归档状态。
+
+Word 使用 A4 单栏、统一标题和间距、教育信息排版及页脚。发送前请在自己的办公软件中预览。
+
+### 存储与部署
+
+默认 SQLite（`state/rag.sqlite`），可用 `RAG_DATABASE_URL` 切换 PostgreSQL。迁移位于 `backend/alembic`：
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini upgrade head
+```
+
+升级旧数据库前先备份。`compose.yaml` 提供 PostgreSQL、API 和 nginx 前端，模型保留在主机；先根据示例创建 `config.docker.json` 并适配主机地址。发布端口绑定回环地址。应用没有认证，供本机使用；仓库提供容器配置，不声称已经验证云端生产运行。
 
 ## 申请材料流程
 
@@ -183,7 +220,7 @@ $runDir = 'outputs\YOUR_RUN_DIRECTORY'
 
 只做提取的运行只产生提取相关的子集。后续生成可能追加带编号的版本。重新生成总结会更新 `report.md` 和 `job_summary.json`；Word 导出会替换与所选 Markdown 对应的 DOCX。
 
-`match_job.py` 的退出码：`0` 表示匹配阶段完成，`1` 表示失败或部分完成，`2` 表示命令行参数无效。可选的总结有独立的状态。
+`match_job.py` 的退出码：`0` 表示匹配阶段完成，`1` 表示失败或部分完成，`2` 表示命令行参数无效，`3` 表示被地点门拦下。`tailor_cv.py`、`interview_prep.py`、`build_resume.py`：`0` 完成，`1` 部分完成（文件已写出）或生成失败，`2` 输入有误、什么都没写。可选的总结有独立的状态。
 
 ## 源码结构
 
@@ -200,7 +237,9 @@ tailor_cv.py             申请材料起草
 build_resume.py         简历组装
 export_docx.py          Word 导出
 interview_prep.py       面试与 STAR 准备
-webapp.py / webui/      本地浏览器界面
+backend/                FastAPI 接口、台账（SQLAlchemy + Alembic）、工作者、自动处理
+frontend/               React + TypeScript 应用（Vite）
+compose.yaml            PostgreSQL + API + nginx 前端
 build_site.py           静态查看页面
 examples/               虚构的演示输入
 tests/                  回归测试与评测工具
@@ -210,8 +249,21 @@ tests/                  回归测试与评测工具
 
 ## 测试
 
+CI 覆盖 Ubuntu/Windows × Python 3.12/3.13 的合成引擎与后端测试、无真实网络请求的采集器测试，以及前端回归和生产构建。当前前端回归覆盖分组／可见性纯逻辑，不宣称已有浏览器 E2E。
+
+```powershell
+python -X utf8 -m unittest discover -s backend/tests -t . -q
+python -X utf8 -m unittest discover -s tools/seek_collector -p "test_*.py" -q
+Push-Location frontend
+npm ci
+npm test
+npm run build
+Pop-Location
+```
+
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m unittest discover -s backend/tests -t . -v
 .\.venv\Scripts\python.exe tests/run_eval.py
 # 已缓存向量模型后可离线评测：
 .\.venv\Scripts\python.exe tests/run_eval.py --offline
