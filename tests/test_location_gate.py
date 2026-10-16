@@ -7,7 +7,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from location_gate import screen_location
 import match_job
-import webapp
+from backend.app.core.config import Settings
+from backend.app.services.pipeline import Pipeline, Task
 
 JD = "Location: Sydney. Attendance in the Sydney office is mandatory three days a week."
 REQ = [{"category": "location", "needs_review": False}]
@@ -71,9 +72,11 @@ class LocationGateTests(unittest.TestCase):
             run.mkdir(parents=True)
             (run / "location_screen.json").write_text(json.dumps({**BLOCK, "message": "Location blocked"}))
             runner = Mock(return_value=(3, f"运行目录：{run}\n状态：blocked\n", ""))
-            pipeline = webapp.Pipeline(project_root=root, runner=runner)
-            job = webapp.Job("example", True)
-            pipeline._run(job, JD * 3)
+            settings = Settings(_env_file=None, project_root=root, jobs_dir=root / "jobs", outputs_dir=root / "outputs",
+                                resume_path=root / "r.docx", config_path=root / "c.json")
+            pipeline = Pipeline(settings, runner=runner)
+            job = Task("full", jd_name="example", with_interview=True)
+            pipeline.run_full(job, JD * 3)
             self.assertEqual(job.status, "blocked")
             self.assertEqual(runner.call_count, 1)
             self.assertTrue(all(s["status"] == "skipped" for s in job.stages[2:]))

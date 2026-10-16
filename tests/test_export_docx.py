@@ -106,18 +106,17 @@ B.Eng. Food Science (2020.09 – 2024.06)
             output = Path(tmp) / "resume.docx"
             export_docx.markdown_to_docx(md.splitlines(), output)
             doc = Document(output)
-            table = doc.tables[-1]
-            self.assertEqual([c.text for c in table.rows[0].cells],
-                             ["2024.02 – 2026.06", "University of Western Australia",
-                              "Master of IT · AI Track"])
-            self.assertEqual(table.rows[1].cells[0].text, "Coursework: Machine Learning")
-            self.assertEqual([c.text for c in table.rows[2].cells],
-                             ["2020.09 – 2024.06", "Wuhan Polytechnic University, China",
-                              "B.Eng. Food Science"])
-            self.assertFalse(any("Master of IT" in p.text or "B.Eng." in p.text
-                                 for p in doc.paragraphs))
-            self.assertEqual([c.width for c in table.columns],
-                             [c.width for c in table.rows[0].cells])
+            self.assertEqual(doc.tables, [])
+            parsed = export_docx.parse_resume(md.splitlines())
+            records, notes = export_docx._education_records(parsed["sections"][0])
+            self.assertEqual([(r["dates"], r["school"], r["degree"]) for r in records],
+                [("2024.02 – 2026.06", "University of Western Australia", "Master of IT · AI Track"),
+                 ("2020.09 – 2024.06", "Wuhan Polytechnic University, China", "B.Eng. Food Science")])
+            self.assertEqual(records[0]["notes"], ["Coursework: Machine Learning"])
+            text = "\n".join(p.text for p in doc.paragraphs)
+            self.assertIn("University of Western Australia\t2024.02 – 2026.06", text)
+            self.assertIn("Wuhan Polytechnic University, China\t2020.09 – 2024.06", text)
+            self.assertIn("Coursework: Machine Learning", text)
 
     def test_degree_without_dates_stays_in_education_table(self):
         doc = Document()
@@ -126,7 +125,7 @@ B.Eng. Food Science (2020.09 – 2024.06)
         self.assertEqual([c.text for c in doc.tables[0].rows[0].cells],
                          ["", "Test University", "Master of IT (AI Track)"])
 
-    def test_export_reproduces_original_layout(self):
+    def test_export_uses_readable_consistent_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             (run / "resume_tailored.md").write_text(MD, encoding="utf-8")
@@ -142,32 +141,30 @@ B.Eng. Food Science (2020.09 – 2024.06)
             doc = Document(outputs["resume"])
             paras = all_paragraphs(doc)
             texts = [p.text for p in paras if p.text.strip()]
-            # header band: name, title, contacts
             name = next(p for p in paras if p.text == "ALEX SAMPLE")
+            self.assertEqual(name.style.name, "Title")
             self.assertEqual(name.runs[0].font.size.pt, 22)
-            self.assertEqual(str(name.runs[0].font.color.rgb), "FFFFFF")
-            self.assertIn("📍 Perth, WA", texts)
-            # navy banners with cyan text
-            banner = next(p for p in paras if p.text == "▐  EDUCATION")
-            self.assertEqual(str(banner.runs[0].font.color.rgb), "00A8CC")
-            self.assertTrue(banner.runs[0].bold)
-            # education table: dates | school | degree
-            self.assertIn("2024.02 – 2026.06", texts)
-            degree = next(p for p in paras if p.text == "Master of IT · AI Track")
-            self.assertEqual(str(degree.runs[0].font.color.rgb), "1F5FA6")
-            self.assertTrue(any(p.text.startswith("Coursework: ") for p in paras))
-            # project bullet with bold navy label
+            self.assertEqual(str(name.runs[0].font.color.rgb), "000000")
+            self.assertIn("Perth, WA  |  someone@example.com", texts)
+            heading = next(p for p in paras if p.text == "EDUCATION")
+            self.assertEqual(heading.style.name, "Heading 1")
+            self.assertTrue(heading.paragraph_format.keep_with_next)
+            self.assertEqual(doc.tables, [])
+            self.assertTrue(any("2024.02 – 2026.06" in t for t in texts))
+            self.assertIn("Master of IT · AI Track", texts)
             bullet = next(p for p in paras if p.text.startswith("Model: "))
             self.assertEqual(bullet.style.name, "List Bullet")
-            self.assertTrue(bullet.runs[0].bold)
-            self.assertEqual(str(bullet.runs[0].font.color.rgb), "1A3A5C")
-            plain = next(p for p in paras if p.text == "Delivered the forum module.")
-            self.assertEqual(plain.style.name, "List Bullet")
-            # skills lines get the diamond marker
-            self.assertIn("◆ Languages  Python · SQL", texts)
-            # two-column additional projects
-            self.assertIn("GeoMind | Object Detection", texts)
-            self.assertIn("CyberWin | Requirements", texts)
+            self.assertEqual(bullet.runs[0].font.size.pt, 9.5)
+            self.assertTrue(bullet.paragraph_format.keep_together)
+            self.assertIn("Languages: Python · SQL", texts)
+            # "Name | Type" becomes its own entry line plus a subtitle line
+            self.assertIn("GeoMind", texts)
+            self.assertIn("Object Detection", texts)
+            self.assertIn("CyberWin", texts)
+            self.assertIn("Requirements", texts)
+            for style_name in ("Title", "Heading 1", "Heading 2"):
+                ppr = doc.styles[style_name].element.pPr
+                self.assertTrue(ppr is None or ppr.find(qn("w:pBdr")) is None)
             self.assertFalse(any("来源附录" in t for t in texts))
             # cover letter
             letter_texts = [p.text for p in Document(outputs["cover_letter"]).paragraphs if p.text.strip()]
@@ -243,3 +240,91 @@ B.Eng. Food Science (2020.09 – 2024.06)
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResumeLayoutRegressionTests(unittest.TestCase):
+    def test_flat_education_groups_dates_school_degree_without_losing_coursework(self):
+        md = "# ALEX\n## EDUCATION\n2024.02 – 2026.06\nTest University\nMaster of IT\n2020.09 – 2024.06\nOther University\nBachelor of Science\nCoursework: Machine Learning\n"
+        parsed = export_docx.parse_resume(md.splitlines())
+        records, notes = export_docx._education_records(parsed["sections"][0])
+        self.assertEqual([(r["dates"],r["school"],r["degree"]) for r in records],
+            [("2024.02 – 2026.06","Test University","Master of IT"),("2020.09 – 2024.06","Other University","Bachelor of Science")])
+        self.assertEqual(notes, ["Coursework: Machine Learning"])
+
+    def test_decorative_source_titles_do_not_create_empty_project_blocks(self):
+        md = "# ALEX\n## OTHER PROJECTS\n▐ OTHER PROJECTS — DATA\n### Project A\n- One fact.\n### Project B\n- Another fact.\n"
+        parsed = export_docx.parse_resume(md.splitlines())
+        self.assertEqual([b["heading"] for b in parsed["sections"][0]["blocks"]], ["Project A","Project B"])
+        self.assertEqual(parsed["sections"][0]["blocks"][0]["lines"][0]["text"], "One fact.")
+
+
+class ColourAnnotationTests(unittest.TestCase):
+    """The five-way colour annotation is decided by the program from the text alone."""
+
+    def kinds(self, text):
+        return [kind for _, kind in export_docx.annotate(text) if kind]
+
+    def test_measurable_result(self):
+        self.assertEqual(self.kinds("Cut p99 latency from 180ms to 62ms."), ["result"])
+        self.assertEqual(self.kinds("Achieving 14/14 Recall@5 on a 22-case set."), ["result"])
+
+    def test_technical_skill(self):
+        self.assertEqual(self.kinds("Built it with PyTorch and Docker."), ["skill", "skill"])
+
+    def test_leadership_and_career_growth(self):
+        self.assertEqual(self.kinds("Mentored three new graduates."), ["lead"])
+        self.assertEqual(self.kinds("Promoted to a senior engineering role."), ["growth"])
+
+    def test_key_strength_is_shaded(self):
+        self.assertEqual(self.kinds("Hands-on experience with end-to-end delivery."), ["strength"])
+
+    def test_plain_line_is_not_coloured(self):
+        self.assertEqual(self.kinds("Recorded the meeting minutes."), [])
+
+    def test_annotation_never_changes_the_text(self):
+        line = "Led the migration, cutting p99 latency from 180ms to 62ms, using PyTorch."
+        self.assertEqual("".join(chunk for chunk, _ in export_docx.annotate(line)), line)
+
+    def test_rendered_runs_carry_the_colours_and_keep_every_character(self):
+        md = ("# ALEX SAMPLE\n## KEY PROJECTS\n### Finance Planner | Flask Web App\n"
+              "- Rebuilt the service with PyTorch, cutting p99 latency from 180ms to 62ms.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "resume.docx"
+            export_docx.markdown_to_docx(md.splitlines(), output)
+            doc = Document(output)
+            bullet = next(p for p in doc.paragraphs if p.text.startswith("Rebuilt the service"))
+            self.assertEqual(bullet.text, "Rebuilt the service with PyTorch, cutting p99 latency from 180ms to 62ms.")
+            self.assertIn("1A7F37", {str(r.font.color.rgb) for r in bullet.runs})   # green: technical skill
+            blue = [r for r in bullet.runs if str(r.font.color.rgb) == "1A5FB4"]   # blue: measurable result
+            self.assertTrue(blue)
+            self.assertTrue(all(r.underline for r in blue))
+
+    def test_section_heading_carries_the_thin_rule(self):
+        md = "# ALEX SAMPLE\n## SUMMARY\nA graduate.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "resume.docx"
+            export_docx.markdown_to_docx(md.splitlines(), output)
+            doc = Document(output)
+            heading = next(p for p in doc.paragraphs if p.text == "SUMMARY")
+            self.assertIsNotNone(heading._p.pPr.find(qn("w:pBdr")))
+
+    @staticmethod
+    def shaded(run):
+        return run._element.rPr is not None and run._element.rPr.find(qn("w:shd")) is not None
+
+    def test_key_strength_is_shaded_in_self_description(self):
+        md = "# ALEX SAMPLE\n## SUMMARY\nHands-on experience with end-to-end delivery.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "resume.docx"
+            export_docx.markdown_to_docx(md.splitlines(), output)
+            line = next(p for p in Document(output).paragraphs if p.text.startswith("Hands-on"))
+            self.assertTrue(any(self.shaded(r) for r in line.runs))
+
+    def test_key_strength_is_off_inside_project_sections(self):
+        md = ("# ALEX SAMPLE\n## KEY PROJECTS\n### Finance Planner | Web App\n"
+              "- Built a privacy-preserving pipeline for the team.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "resume.docx"
+            export_docx.markdown_to_docx(md.splitlines(), output)
+            bullet = next(p for p in Document(output).paragraphs if p.text.startswith("Built a privacy"))
+            self.assertFalse(any(self.shaded(r) for r in bullet.runs))

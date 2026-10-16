@@ -176,6 +176,19 @@ class ExperienceRetriever:
         )
         return self
 
+    def basic_profile_candidates(self, query):
+        """Include relevant declared desktop/office facts without inventing them."""
+        if self.model is None:
+            self.build()
+        groups = []
+        if re.search(r"\bwindows\b|基础.*(?:电脑|计算机)|计算机素养|\b(?:computer|digital) literacy\b|\bbasic computer skills\b", query, re.I):
+            groups.append("Windows 基础应用")
+        if re.search(r"\b(?:microsoft 365|m365|office 365|microsoft office|ms office|office suite|excel|word|powerpoint|outlook|teams|onedrive|sharepoint|google workspace)\b|办公软件", query, re.I):
+            groups.append("办公软件")
+        chunks = [c for c in self.chunks if c["source"].replace("\\", "/").rsplit("/", 1)[-1].lower() == "profile.md"
+                  and any(c["section"].startswith(g) for g in groups)]
+        return [{**r, "matched_by_query": query} for r in rank_sections(chunks, [0.0] * len(chunks), 2)]
+
     def search(self, query, top_k=5):
         if self.model is None:
             self.build()
@@ -208,7 +221,7 @@ def main():
         default=Path(__file__).resolve().parent / "experiences"
     )
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--json", action="store_true", help="输出 JSON，便于后续接入 Flask")
+    parser.add_argument("--json", action="store_true", help="输出 JSON，便于其他程序读取")
     parser.add_argument("--offline", action="store_true", help="仅使用已缓存模型")
     parser.add_argument("--all-sections", action="store_true", help="同时搜索基本信息、CV、STAR 等章节")
     parser.add_argument("--check", action="store_true", help="只检查资料读取，不加载模型")

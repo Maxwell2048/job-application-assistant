@@ -16,13 +16,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 INCLUDE_FILES = [
     "README.md", "README.zh-CN.md", "CHANGELOG.md", "LICENSE", "requirements.txt", "requirements-test.txt",
     ".github/workflows/tests.yml", "config.local.example.json",
-    "project_template.md", "start.bat", "make_public_release.py",
+    "project_template.md", "start.bat", "make_public_release.py", ".env.example",
+    "requirements-backend.txt", "requirements-collector.txt", "docs/application-workflow.md", "Dockerfile.api", ".dockerignore", "compose.yaml", ".github/workflows/tests.yml",
+    "frontend/package.json", "frontend/package-lock.json", "frontend/index.html", "frontend/vite.config.ts",
+    "frontend/tsconfig.json", "frontend/tsconfig.app.json", "frontend/tsconfig.node.json", "frontend/.gitignore",
+    "frontend/.oxlintrc.json", "frontend/Dockerfile", "frontend/.dockerignore", "frontend/nginx.conf",
+    "frontend/public/favicon.svg",
     "add_jd.py", "build_resume.py", "build_site.py", "evidence_matcher.py", "export_docx.py",
     "import_uwa_kb.py", "interview_prep.py", "jd_parser.py", "job_identity.py", "job_summary.py", "local_llm.py",
-    "location_gate.py", "match_job.py", "report_writer.py", "search_experience.py", "tailor_cv.py", "webapp.py",
+    "location_gate.py", "match_job.py", "report_writer.py", "search_experience.py", "tailor_cv.py",
     "docs/jd_matcher_spec.md",
     "examples/experiences/demo_project.md", "examples/junior_developer_jd.txt",
-    "webui/index.html",
     "tests/run_eval.py", "tests/eval_jd.txt", "tests/public_eval_set.json", "tests/public_eval_jd.txt",
 ]
 # Tests that need only synthetic data. test_eval_set.py and eval_set.json refer
@@ -31,43 +35,22 @@ INCLUDE_TESTS = [
     "test_add_jd.py", "test_build_resume.py", "test_build_site.py", "test_evidence_matcher.py",
     "test_export_docx.py", "test_import_uwa_kb.py", "test_interview_prep.py", "test_jd_parser.py",
     "test_job_identity.py", "test_job_summary.py", "test_local_llm.py", "test_match_job.py", "test_report_writer.py",
-    "test_retriever.py", "test_sources.py", "test_tailor_cv.py", "test_webapp.py",
+    "test_retriever.py", "test_sources.py", "test_tailor_cv.py",
     "test_public_release.py", "test_public_eval.py", "test_location_gate.py",
     "test_quote_tolerance.py",
 ]
-KEEP_DIRS = ["experiences", "resume", "jobs", "outputs"]
+# Whole directories copied file by file (caches and compiled files skipped).
+INCLUDE_DIRS = ["backend", "frontend/src", "frontend/tests", "tools/seek_collector"]
+SKIP_DIR_NAMES = {".git", ".seek_cache", "seek_output", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules", "dist"}
+KEEP_DIRS = ["experiences", "resume", "jobs", "outputs", "state"]
 
-PUBLIC_GITIGNORE = """# Python
-__pycache__/
-*.pyc
-.venv/
-
-# Local model service config (credentials, machine-specific settings)
-config.local.json
-
-# Private material: never commit your own corpus, resume, JDs or generated runs
-/experiences/*
-!/experiences/.gitkeep
-/resume/*
-!/resume/.gitkeep
-/jobs/*
-!/jobs/.gitkeep
-/outputs/*
-!/outputs/.gitkeep
-/_sources/
-/_review/
-site/
-.claude/
-*.log
-.env
-.env.*
-private_patterns*.json
-"""
+PUBLIC_GITIGNORE = '# Python\n__pycache__/\n*.pyc\n.venv/\n\n# Local model service config (credentials, machine-specific settings)\nconfig.local.json\n\n# Private material: never commit your own corpus, resume, JDs or generated runs\n/experiences/*\n!/experiences/.gitkeep\n/resume/*\n!/resume/.gitkeep\n/jobs/*\n!/jobs/.gitkeep\n/outputs/*\n!/outputs/.gitkeep\n/_sources/\n/_review/\nsite/\n*.log\n.env\n.env.*\n!.env.example\nprivate_patterns*.json\n\n# Local runtime and generated artifacts\n/state/*\n!/state/.gitignore\n/output/\nconfig.docker.json\n/frontend/node_modules/\n/frontend/dist/\n/frontend/*.tsbuildinfo\n/frontend/vite.config.js\n/frontend/vite.config.d.ts\n.seek_cache/\nseek_output/\n_seek_*.txt\n.seek_*.json\n'
 
 # Generic secret formats only. Personal patterns belong in an ignored local file.
 FORBIDDEN = [r"(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}",
              r"sk-[A-Za-z0-9_-]{20,}", r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"]
-TEXT_SUFFIXES = {".py", ".md", ".txt", ".json", ".html", ".bat", ".css", ".js", ""}
+TEXT_SUFFIXES = {".py", ".md", ".txt", ".json", ".html", ".bat", ".css", ".js", ".ts", ".tsx", ".yml", ".yaml",
+                 ".conf", ".ini", ".mako", ".example", ".svg", ".toml", ""}
 
 
 def validate_destination(out):
@@ -91,9 +74,25 @@ def load_patterns(path=None):
     return [re.compile(p, re.IGNORECASE) for p in patterns]
 
 
+def list_dir_files():
+    """Relative paths of every text/source file under INCLUDE_DIRS."""
+    found = []
+    for name in INCLUDE_DIRS:
+        base = PROJECT_ROOT / name
+        if not base.is_dir():
+            raise ValueError(f"Missing source directory: {name}")
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or any(part in SKIP_DIR_NAMES for part in path.relative_to(PROJECT_ROOT).parts):
+                continue
+            if path.suffix in (".pyc", ".sqlite", ".sqlite-wal", ".sqlite-shm"):
+                continue
+            found.append(path.relative_to(PROJECT_ROOT).as_posix())
+    return found
+
+
 def copy_tree(out):
     out = validate_destination(out)
-    files = INCLUDE_FILES + [f"tests/{name}" for name in INCLUDE_TESTS]
+    files = INCLUDE_FILES + [f"tests/{name}" for name in INCLUDE_TESTS] + list_dir_files()
     # Resolve and validate every allowlisted input before writing anything.
     # A link anywhere below the project root changes the resolved path. Compare
     # against the resolved root: the root itself may legitimately be spelled
@@ -111,6 +110,7 @@ def copy_tree(out):
     for name in KEEP_DIRS:
         (out / name).mkdir(exist_ok=True)
         (out / name / ".gitkeep").write_text("", encoding="utf-8")
+    (out / "state" / ".gitignore").write_text("*\n!.gitignore\n", encoding="utf-8")
     (out / ".gitignore").write_text(PUBLIC_GITIGNORE, encoding="utf-8")
     return files
 

@@ -5,7 +5,6 @@ quotes in the normalized JD text, assigns IDs/spans, and flags anything it
 cannot verify. Model output is never trusted for offsets or line numbers.
 """
 import hashlib
-import json
 import re
 from pathlib import Path
 
@@ -185,7 +184,7 @@ def locate_quote(text, quote, context=""):
     not found. Raises AmbiguousQuoteError when several occurrences exist and
     the context cannot single one out.
     """
-    if not quote:
+    if not quote or not quote.strip():
         return None
     spans = _find_all(text, quote)
     if len(spans) == 1:

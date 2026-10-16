@@ -56,6 +56,11 @@ class ServiceError(LLMError):
     error_type = "service_unavailable"
 
 
+class RequestRejectedError(LLMError):
+    """A permanent HTTP rejection; repeating the same body cannot fix it."""
+    error_type = "http_error"
+
+
 class RequestTimeoutError(LLMError):
     error_type = "timeout"
 
@@ -428,8 +433,28 @@ class OpenAIHttpAdapter(BaseAdapter):
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw_body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
-            raise ServiceError(f"本机服务返回 HTTP {exc.code}：{exc.reason}",
-                               error_type="http_error") from exc
+            detail = ""
+            try:
+                payload = json.loads(exc.read(8192).decode("utf-8", errors="replace"))
+                error = payload.get("error", {}) if isinstance(payload, dict) else {}
+                if isinstance(error, dict):
+                    detail = str(error.get("message") or error.get("code") or "")
+                elif isinstance(error, str):
+                    detail = error
+            except (OSError, ValueError):
+                pass
+            finally:
+                exc.close()
+            if self.api_key:
+                detail = detail.replace(self.api_key, "[redacted]")
+            detail = " ".join(detail.split())[:600]
+            message = f"本机服务返回 HTTP {exc.code}：{exc.reason}"
+            if detail:
+                message += f"；{detail}"
+            if exc.code == 400:
+                message += "；请核对 model、response_format、extra_body 与服务支持的参数"
+            error_cls = RequestRejectedError if 400 <= exc.code < 500 and exc.code not in (408, 429) else ServiceError
+            raise error_cls(message, error_type="http_error") from exc
         except urllib.error.URLError as exc:
             reason = str(exc.reason)
             if isinstance(exc.reason, (TimeoutError, socket.timeout)) or "timed out" in reason:

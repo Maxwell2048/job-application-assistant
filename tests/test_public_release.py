@@ -40,7 +40,7 @@ class PublicReleaseTests(unittest.TestCase):
             private = base / "private_patterns.json"
             private.write_text(json.dumps(["example-" + "private-marker"]))
             out = base / "release"
-            with patch.multiple(release, PROJECT_ROOT=source, INCLUDE_FILES=["README.md"], INCLUDE_TESTS=[]), contextlib.redirect_stdout(io.StringIO()):
+            with patch.multiple(release, PROJECT_ROOT=source, INCLUDE_FILES=["README.md"], INCLUDE_TESTS=[], INCLUDE_DIRS=[]), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(release.main(["--out", str(out), "--private-patterns", str(private)]), 0)
                 with self.assertRaises(ValueError):
                     release.copy_tree(out)
@@ -52,7 +52,7 @@ class PublicReleaseTests(unittest.TestCase):
             source = Path(tmp) / "source"
             source.mkdir()
             out = Path(tmp) / "release"
-            with patch.multiple(release, PROJECT_ROOT=source, INCLUDE_FILES=["missing.py"], INCLUDE_TESTS=[]), self.assertRaises(ValueError):
+            with patch.multiple(release, PROJECT_ROOT=source, INCLUDE_FILES=["missing.py"], INCLUDE_TESTS=[], INCLUDE_DIRS=[]), self.assertRaises(ValueError):
                 release.copy_tree(out)
             self.assertFalse(out.exists())
 
@@ -76,3 +76,17 @@ class PublicReleaseTests(unittest.TestCase):
                 code = release.main(["--out", str(Path(tmp) / "out"), "--private-patterns", str(private)])
             self.assertEqual(code, 2)
             self.assertNotIn(marker, stderr.getvalue())
+
+
+class DirectoryListingTests(unittest.TestCase):
+    def test_include_dirs_skip_caches_and_compiled_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)
+            (source / "backend" / "app" / "__pycache__").mkdir(parents=True)
+            (source / "backend" / "app" / "main.py").write_text("print(1)\n", encoding="utf-8")
+            (source / "backend" / "app" / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"\x00")
+            (source / "backend" / "state.sqlite").write_bytes(b"\x00")
+            with patch.multiple(release, PROJECT_ROOT=source, INCLUDE_DIRS=["backend"]):
+                self.assertEqual(release.list_dir_files(), ["backend/app/main.py"])
+            with patch.multiple(release, PROJECT_ROOT=source, INCLUDE_DIRS=["missing"]), self.assertRaises(ValueError):
+                release.list_dir_files()

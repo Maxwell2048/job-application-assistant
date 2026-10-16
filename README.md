@@ -4,9 +4,9 @@
 
 **A local-first AI assistant for job screening, evidence-grounded resume tailoring, and interview preparation.**
 
-Screen a job description against your own project experience, trace each requirement to supporting evidence, and prepare a tailored resume, cover letter, and interview plan. The assistant keeps missing evidence separate from processing failures and checks generated quotations against the original sources.
+Turn a job description and a private experience library into an evidence-linked matching report, a preparation plan, CV suggestions, a cover letter, an assembled resume, and interview preparation.
 
-Built as a personal portfolio project with AI-assisted development (Claude Code and Codex as coding assistants; requirements, evidence curation, validation rules and acceptance by the author). The interface and reports are primarily in Chinese; source materials and job descriptions can contain Chinese or English.
+Developed and maintained by Bomin Liao. The interface and reports are primarily in Chinese; source materials and job descriptions can contain Chinese or English.
 
 > Retrieval similarity is not a hiring probability. Missing evidence does not mean an applicant lacks a skill. Generated application materials are drafts for human review.
 
@@ -19,7 +19,7 @@ Built as a personal portfolio project with AI-assisted development (Claude Code 
 - Programmatic checks on JSON structure, requirement IDs, candidate IDs, and verbatim quotations.
 - Application-readiness summaries with strengths, evidence gaps, prioritized learning exercises, and completion criteria.
 - Source-linked CV suggestions, cover letters, resume assembly, interview questions, and STAR preparation.
-- DOCX export, a local Flask interface, and a static report viewer.
+- DOCX export, a FastAPI + React web application with an autopilot that collects, screens and queues new postings, and a static report viewer.
 
 ## Architecture
 
@@ -124,17 +124,59 @@ Save a real JD as UTF-8 TXT/Markdown, then run:
 
 `add_jd.py` can also save a JD from the clipboard, `--file`, or `--stdin`.
 
-## Browser interface
+## Web application
 
-After adding your own experience, resume, and model configuration:
+The pipeline is exposed through a FastAPI backend and a React + TypeScript frontend. One launcher does everything on Windows:
 
 ```powershell
-.\.venv\Scripts\python.exe webapp.py --resume resume\base_resume.docx --config config.local.json
+.\start.bat
 ```
 
-Open `http://127.0.0.1:5000`. The interface orchestrates CLI stages, processes one job at a time, and displays progress, reports, history, and downloads. A running job can be aborted; aborting a pasted-JD job also removes its unfinished run directory and saved JD file. Interview preparation is off by default and can be generated later for any finished run from the result or history view. It binds to loopback and has no authentication; it is intended for local use, not public hosting.
+After you provide `config.local.json` and `resume/base_resume.docx`, the launcher creates the virtual environment, builds the frontend once (Node 22 required for the build; the built `frontend/dist` is served by the backend), applies database migrations and opens `http://127.0.0.1:8000`. Manual equivalents:
 
-`start.bat` is a convenience launcher for the original setup and expects a specific resume filename. Use the explicit command above for a different filename.
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
+Push-Location frontend
+npm ci
+npm run build
+Pop-Location
+.\.venv\Scripts\python.exe -m backend.app.main        # API docs at /docs
+```
+
+Pages: a **board** of every job by status, a **job page** with the screening verdict and its verbatim quote, live stage progress, rendered documents and Word downloads, **manual submission** of a pasted JD, **autopilot** status and history, **run history** and read-only **settings**. Progress arrives over server-sent events. One generation runs at a time because the local model has a single slot; a running task can be aborted, and aborting a pasted-JD task removes its unfinished run directory and saved JD file. Interview preparation is off by default and can be added to any finished run.
+
+### Autopilot and collection
+
+Scheduled collection is disabled by default. Manual rounds are available on the autopilot page or through the CLI:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.autopilot tick --no-generate
+.\.venv\Scripts\python.exe -m backend.app.autopilot tick --mode broad --no-generate
+```
+
+The SEEK collector source is included under `tools/seek_collector/`. Set `RAG_COLLECTOR_DIR` to an existing **private runtime directory** for its cache, pagination cursors and collected output; this directory is not a separate source-code dependency. Optionally install `requirements-collector.txt` for the curl-based transport; the standard-library fallback is supported.
+
+Focused mode searches junior-level and specific IT role lanes. Broad mode adds Perth ICT listings. Nationwide remote lanes still require employer wording that permits working from WA; a listing label or the word “remote” alone is insufficient. Generic support, engineering and graduate titles do not establish an IT role. Search progress is persisted between rounds; failed pages remain pending. The collector stops on access-denied or rate-limit responses; it does not guarantee access to third-party listings.
+
+Only items with employer JD text are imported. Title-only discoveries remain in the private collector output rather than occupying the board. Existing legacy title-only records are not automatically deleted by this release. Eligible jobs can wait in “ready” or be queued for generation, according to the saved choice. Manually skipped jobs stay archived and are excluded from active resume lists and counts.
+
+Work-rights and fit screening combine model results, original quotations and program rules. Processing errors are recorded separately from successful judgments. These checks assist human review; they do not establish legal eligibility or hiring probability. See [application workflow](docs/application-workflow.md) for configuration and behavior.
+
+### Resume tracking and document layout
+
+The resume page groups generated versions by date. Each version has its own submitted/unsubmitted state; downloading a file does not mark it submitted. Archived jobs are hidden from active resume groups while their reports and submission history remain stored. Jobs are fetched across API pages, and run metadata carries archive status independently.
+
+Word exports use a single-column A4 layout, consistent headings and spacing, formatted education entries and page footers. Preview the output in your office software before sending it.
+
+### Storage and deployment
+
+SQLite is the default single-machine ledger (`state/rag.sqlite`). Set `RAG_DATABASE_URL` to use PostgreSQL. Schema changes are Alembic migrations under `backend/alembic`:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini upgrade head
+```
+
+Back up an existing database before upgrading. `compose.yaml` provides PostgreSQL, the API and nginx frontend; model inference remains on the host. Create `config.docker.json` from the example and adapt the host endpoint. Published ports bind to loopback. The application has no authentication and is intended for local use. Container configuration is included; cloud deployment and production operations are not claimed.
 
 ## Application workflow
 
@@ -183,7 +225,7 @@ Matching creates `outputs/<timestamp>-<suffix>/`:
 
 Extraction-only runs produce the extraction subset. Later generation may add numbered versions. Regenerating a summary updates `report.md` and `job_summary.json`; Word export can replace the DOCX associated with its selected Markdown input.
 
-`match_job.py` returns `0` for a completed matching stage, `1` for failed/partial processing, and `2` for invalid CLI arguments. The optional summary has a separate status.
+`match_job.py` returns `0` for a completed matching stage, `1` for failed/partial processing, `2` for invalid CLI arguments, and `3` when the location gate blocks the role. `tailor_cv.py`, `interview_prep.py` and `build_resume.py` return `0` when complete, `1` for partial output (files written) or a failed generation, and `2` when the input was unusable and nothing was written. The optional summary has a separate status.
 
 ## Source layout
 
@@ -200,7 +242,9 @@ tailor_cv.py             Application drafting
 build_resume.py         Resume assembly
 export_docx.py          Word export
 interview_prep.py       Interview and STAR preparation
-webapp.py / webui/      Local browser interface
+backend/                FastAPI API, ledger (SQLAlchemy + Alembic), worker, autopilot
+frontend/               React + TypeScript app (Vite)
+compose.yaml            PostgreSQL + API + nginx frontend
 build_site.py           Static viewer
 examples/               Fictional demonstration inputs
 tests/                  Regression and evaluation tooling
@@ -210,8 +254,21 @@ tests/                  Regression and evaluation tooling
 
 ## Testing
 
+CI runs synthetic engine tests and backend API tests on Ubuntu/Windows with Python 3.12/3.13, collector tests without live network requests, and frontend regression tests plus a production build. The frontend tests currently cover pure grouping and visibility logic; browser E2E coverage is not claimed.
+
+```powershell
+python -X utf8 -m unittest discover -s backend/tests -t . -q
+python -X utf8 -m unittest discover -s tools/seek_collector -p "test_*.py" -q
+Push-Location frontend
+npm ci
+npm test
+npm run build
+Pop-Location
+```
+
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m unittest discover -s backend/tests -t . -v
 .\.venv\Scripts\python.exe tests/run_eval.py
 # After the embedding model has been cached:
 .\.venv\Scripts\python.exe tests/run_eval.py --offline

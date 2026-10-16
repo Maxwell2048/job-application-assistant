@@ -63,7 +63,7 @@ results = retriever.search(query, top_k=5)
 建议目录：
 
 ```text
-job-application-assistant/
+job_rag_starter/
   search_experience.py          # 已有
   experiences/                 # 已有
   match_job.py                 # 新增 CLI

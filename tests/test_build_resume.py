@@ -241,3 +241,29 @@ class BuildTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AssemblyReferenceRegressionTests(unittest.TestCase):
+    def test_title_and_resume_refs_keep_real_source_quotes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            materials, resume, suggestions = setup_dir(Path(tmp))
+            suggestions['projects'][0]['title'] = 'Map Annotation  |  Coursework'
+            resume['text'] += '\nCITS5505: Finance Planner | Coursework\n'
+            refs = build_resume.assembly_references(suggestions, resume)
+            self.assertEqual(refs['H01']['text'], suggestions['projects'][0]['title'])
+            self.assertEqual(refs['H01']['basis'][0]['material_id'], 'M004')
+            r = next(v for k, v in refs.items() if k.startswith('R') and 'Finance Planner' in v['text'])
+            self.assertNotIn('CITS5505', r['text'])
+            self.assertIn('CITS5505', r['basis'][0]['quote'])
+            self.assertEqual(refs['SUMMARY']['basis'][0]['material_id'], 'RESUME')
+
+    def test_selection_schema_blocks_invented_quotes_and_unknown_references(self):
+        from local_llm import validate_against_schema
+        refs = {'SUMMARY': {'text': 'IT graduate.', 'basis': []}, 'R001': {'text': 'ALEX', 'basis': []}}
+        schema = build_resume.assembly_schema(refs)
+        good = {'sections': [{'title': 'Header', 'lines': [{'kind': 'text', 'ref': 'R001'}]}, {'title': 'Summary', 'lines': [{'kind': 'text', 'ref': 'SUMMARY'}]}]}
+        self.assertEqual(validate_against_schema(good, schema), [])
+        bad = json.loads(json.dumps(good)); bad['sections'][1]['lines'][0]['ref'] = 'FAKE'
+        self.assertTrue(validate_against_schema(bad, schema))
+        bad = json.loads(json.dumps(good)); bad['sections'][1]['lines'][0]['basis'] = [{'material_id': 'SUMMARY', 'quote': 'Invented'}]
+        self.assertTrue(validate_against_schema(bad, schema))

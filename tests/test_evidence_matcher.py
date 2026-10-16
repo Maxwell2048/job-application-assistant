@@ -499,9 +499,6 @@ class EvidenceMatcherTests(unittest.TestCase):
         self.assertEqual([r["processing_status"] for r in results], ["ok", "ok"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ProfileCapTests(unittest.TestCase):
     """profile.md sections are capped so project evidence stays in the judgment."""
@@ -529,13 +526,30 @@ class ProfileCapTests(unittest.TestCase):
         hits = [self.profile_hit(i, 0.9 - i * 0.01) for i in range(5)] + [
             {**SECTION_A, "score": 0.6}]
         retriever = FakeRetriever({"标注": hits})
-        llm = FakeLLM([{"judgments": [{"requirement_id": "R001", "verdict": "insufficient",
-                                        "reason": "无", "evidence": [], "missing_aspects": [],
-                                        "questions_for_user": []}]}])
+        llm = FakeLLM([judgment("R001", "insufficient")])
         matcher = make_matcher(llm, retriever, top_k=5)
-        matcher.match_requirement(make_requirement(queries=("标注",)))
+        result = matcher.match_requirement(make_requirement(queries=("标注",)))
+        self.assertEqual((result["processing_status"], result["verdict"]), ("ok", "insufficient"))
         self.assertGreater(retriever.searches[0][1], 5)
         sent = llm.calls[0]["candidates"]
         sources = [c["project"] for c in sent]
         self.assertEqual(sources.count("个人基本信息（自述事实）"), 2)
         self.assertIn("Synthetic Project", sources)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class DeclaredBasicSkillsRegressionTests(unittest.TestCase):
+    def test_relevant_profile_reaches_judge_despite_low_semantic_rank(self):
+        profile = {**SECTION_A, "source": "profile.md", "section_id": "windows", "section": "Windows 基础应用", "text": "本人确认熟练使用 Windows 基础应用。", "score": 0.1}
+        retriever = FakeRetriever({"windows": [SECTION_A, SECTION_B]})
+        retriever.basic_profile_candidates = lambda query: [profile]
+        llm = FakeLLM([judgment("R001", "direct", quotes=[("E001", profile["text"])], reason="本人自述")])
+        requirement = {**make_requirement(queries=("windows",)), "text": "Proficiency with Windows applications"}
+        result = make_matcher(llm, retriever, top_k=2).match_requirement(requirement)
+        self.assertEqual(result["verdict"], "direct")
+        self.assertEqual(result["evidence"][0]["source"], "profile.md")
+        self.assertEqual(llm.calls[0]["candidates"][0]["evidence_type"], "self_report")
+        self.assertEqual(llm.calls[0]["candidates"][1]["evidence_type"], "project_evidence")

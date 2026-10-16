@@ -155,3 +155,22 @@ class RetrieverTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BasicProfileRegressionTests(unittest.TestCase):
+    build_retriever = RetrieverTests.build_retriever
+    quiet = RetrieverTests.quiet
+    def test_declared_basic_skills_are_available_with_source_and_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            make_corpus(folder)
+            (folder / "profile.md").write_text("# Profile\n## Windows 基础应用 Windows Desktop Productivity\n本人确认熟练使用 Windows 基础应用；不包括 Windows Server 管理。\n## 办公软件 Microsoft Office\n本人确认精通 Excel、Word 和 Outlook。\n", encoding="utf-8")
+            retriever = self.build_retriever(folder, FakeModel())
+            windows = self.quiet(retriever.basic_profile_candidates, "Proficiency with Windows applications")
+            office = retriever.basic_profile_candidates("Advanced Excel skills")
+            self.assertEqual(len(windows), 1)
+            self.assertEqual(windows[0]["source"], "profile.md")
+            self.assertIn("不包括 Windows Server", windows[0]["text"])
+            self.assertEqual(len(office), 1)
+            self.assertTrue(office[0]["section"].startswith("办公软件"))
+            self.assertEqual(retriever.basic_profile_candidates("Python machine learning"), [])

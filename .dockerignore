@@ -1,0 +1,29 @@
+# What `COPY . .` in Dockerfile.api must not pick up. Personal material and
+# secrets are mounted at run time (compose.yaml), never built into an image.
+experiences/
+resume/
+jobs/
+outputs/
+state/
+site/
+_sources/
+_review/
+walkthrough/
+config.local.json
+config.docker.json
+private_patterns*.json
+.env
+.env.*
+!.env.example
+
+# Not needed by the api image
+.git/
+.github/
+.claude/
+.venv/
+**/__pycache__/
+*.pyc
+*.log
+frontend/
+tests/
+backend/tests/

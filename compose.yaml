@@ -1,0 +1,65 @@
+# Whole system with one command:
+#   copy .env.example to .env and set POSTGRES_PASSWORD, then
+#   docker compose up --build --wait
+# Page: http://127.0.0.1:8080   API docs: http://127.0.0.1:8080/docs
+#
+# The local model server (llama-server) stays on the host; the api container
+# reaches it through host.docker.internal. Put a copy of config.local.json
+# with base_url http://host.docker.internal:18080/v1 at ./config.docker.json.
+# Personal material (experiences/, resume/, jobs/, outputs/) is mounted, never
+# built into an image.
+# The embedding model is read from the host's Hugging Face cache (the pipeline
+# runs the retriever offline); set HF_CACHE_DIR in .env if yours is elsewhere.
+name: job-evidence-rag
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-job_rag}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      RAG_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-job_rag}
+      RAG_AUTOPILOT_ENABLED: ${RAG_AUTOPILOT_ENABLED:-false}
+      RAG_AUTOPILOT_INTERVAL_HOURS: ${RAG_AUTOPILOT_INTERVAL_HOURS:-6}
+      RAG_CORS_ORIGINS: '["http://127.0.0.1:8080","http://localhost:8080"]'
+    volumes:
+      - ./experiences:/app/experiences:ro
+      - ./resume:/data/resume:ro
+      - ./jobs:/data/jobs
+      - ./outputs:/data/outputs
+      - ./config.docker.json:/data/config.local.json:ro
+      - ${HF_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/settings', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+
+  web:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
