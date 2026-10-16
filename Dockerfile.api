@@ -1,0 +1,23 @@
+# Backend + generation engine. Build from the repository root:
+#   docker compose up --build
+# The engine modules live at the repository root and the backend imports them
+# by bare name, so the whole tree is copied and the root is on PYTHONPATH.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONUTF8=1 PYTHONPATH=/app
+WORKDIR /app
+
+COPY requirements.txt requirements-backend.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-backend.txt
+
+COPY . .
+
+# Data directories are mounted at /data (see compose.yaml).
+ENV RAG_JOBS_DIR=/data/jobs RAG_INBOX_DIR=/data/jobs/inbox RAG_OUTPUTS_DIR=/data/outputs \
+    RAG_RESUME_PATH=/data/resume/base_resume.docx RAG_CONFIG_PATH=/data/config.local.json \
+    RAG_FRONTEND_DIST=/nonexistent RAG_AUTO_CREATE_SCHEMA=false RAG_HOST=0.0.0.0 RAG_PORT=8000
+
+EXPOSE 8000
+# Apply migrations, then serve. The web container proxies /api here. `exec` makes
+# python replace the shell, so `docker stop` reaches it and the app shuts down cleanly.
+CMD ["sh", "-c", "cd backend && alembic upgrade head && cd .. && exec python -m backend.app.main --host 0.0.0.0 --port 8000"]
