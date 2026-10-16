@@ -1,0 +1,2 @@
+# Optional transport adapter for the bundled SEEK collector.
+curl_cffi>=0.7,<1
