@@ -392,3 +392,45 @@ class ExtraBodyTests(unittest.TestCase):
         self.assertEqual(sent["body"]["chat_template_kwargs"], {"enable_thinking": False})
         self.assertEqual(sent["body"]["response_format"], {"type": "json_object"})
         self.assertEqual(adapter.describe_parameters()["extra_body"], config["extra_body"])
+
+
+class HttpCompatibilityRegressionTests(unittest.TestCase):
+    def test_400_reports_server_reason_without_repeating_request(self):
+        from unittest.mock import patch
+        import urllib.error
+        import local_llm
+        body = json.dumps({"error": {"code": "response_format_not_supported", "message": "Only text response_format is supported"}}).encode()
+        error = urllib.error.HTTPError("http://localhost/v1/chat/completions", 400, "Bad Request", {}, io.BytesIO(body))
+        with patch.object(local_llm.urllib.request, "urlopen", side_effect=error) as send:
+            with self.assertRaises(local_llm.RequestRejectedError) as caught:
+                make_adapter().generate_json("extract_requirements", "Return JSON", {}, SCHEMA)
+        self.assertEqual(send.call_count, 1)
+        self.assertIn("Only text response_format", str(caught.exception))
+        self.assertIn("response_format", str(caught.exception))
+
+    def test_none_omits_wire_format_and_keeps_local_validation(self):
+        from unittest.mock import patch
+        import local_llm
+        sent = []
+        def send(request, timeout):
+            sent.append(json.loads(request.data))
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"a":1,"b":"x"}'}}]}).encode())
+        with patch.object(local_llm.urllib.request, "urlopen", side_effect=send):
+            result = make_adapter(response_format="none").generate_json("t", "Return JSON", {}, SCHEMA)
+        self.assertEqual(result, {"a": 1, "b": "x"})
+        self.assertNotIn("response_format", sent[0])
+
+    def test_503_is_still_retried(self):
+        from unittest.mock import patch
+        import urllib.error
+        import local_llm
+        def fail(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 503, "Unavailable", {}, io.BytesIO(b'{}'))
+        with patch.object(local_llm.urllib.request, "urlopen", side_effect=fail) as send:
+            with self.assertRaises(LLMError):
+                self.assertIsNone(self.quiet_generate())
+        self.assertEqual(send.call_count, 3)
+
+    def quiet_generate(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return make_adapter().generate_json("t", "sys", {}, SCHEMA)

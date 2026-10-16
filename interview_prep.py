@@ -15,6 +15,7 @@ preparation notes for the candidate to review.
 import argparse
 import datetime
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -117,7 +118,7 @@ def batches(matches, size=DEFAULT_BATCH):
 
 # ---------------------------------------------------------------- validation
 
-HONEST_FORBIDDEN = ("experience with", "proficient", "expert", "years")
+HONEST_FORBIDDEN = ("experience with", "proficient", "expert", "years of")  # matched as whole words
 
 
 def validate_items(data, batch_ids, by_id, allowed, jd_text):
@@ -160,9 +161,8 @@ def validate_answer(points, by_id, allowed, jd_text, label="第 {index} 个 poin
                     continue
                 if not number_supported(number, pool):
                     errors.append(f"{label.format(index=index)}（Honest）含材料中没有的数字 {number!r}")
-            lowered = text.lower()
             for phrase in HONEST_FORBIDDEN:
-                if phrase in lowered:
+                if re.search(rf"\b{re.escape(phrase)}\b", text, re.I):
                     errors.append(f"{label.format(index=index)}（Honest）不能声称能力（含“{phrase}”）；"
                                   "只承认缺口并说明可迁移经历或学习计划")
                     break
@@ -203,7 +203,9 @@ def prepare(llm, matches, jd_text, materials, timeout_seconds=None, batch_size=D
                 and len(payload["materials"]) > len([m for m in chosen if m["kind"] == "profile"]):
             payload["materials"] = payload["materials"][:-1]
             allowed = [m["material_id"] for m in payload["materials"]]
-            result["warnings"].append(f"第 {number} 批材料超出预算，已减少可引用章节")
+        if len(payload["materials"]) < len(chosen):
+            result["warnings"].append(f"第 {number} 批材料超出预算，可引用章节由 {len(chosen)} 条减到 "
+                                      f"{len(payload['materials'])} 条")
         try:
             data = llm.generate_json(task, SYSTEM_PROMPT, payload, PREP_SCHEMA, timeout_seconds,
                                      validate=lambda d, ids=batch_ids, al=allowed:
@@ -346,7 +348,7 @@ def main(argv=None):
         llm = build_llm(config)
     except (OSError, ValueError, LLMError, KeyError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
-        return 1
+        return 2  # nothing written; 1 is reserved for "partial, files written"
     materials, _by_project, _resume = load_materials(args.data)
     print(f"[interview-prep] 要求 {len(matches)} 条，材料 {len(materials)} 条；生成中……",
           file=sys.stderr)

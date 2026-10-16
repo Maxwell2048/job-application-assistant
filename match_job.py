@@ -46,7 +46,7 @@ def build_parser():
     parser.add_argument("--offline", action="store_true",
                         help="向量模型仅使用本地缓存；生成模型仍可通过本机接口调用")
     parser.add_argument("--json", action="store_true",
-                        help="stdout 仅输出最终 JSON；进度与错误写 stderr")
+                        help="stdout 仅输出最终 JSON；不打印进度，模型重试日志仍写 stderr")
     return parser
 
 
@@ -88,6 +88,14 @@ def _judgment_errors(matches):
                         + "；".join(match["errors"])),
         })
     return summary
+
+
+def _fail(meta, error_type, exc):
+    """Record an exception and mark the run failed, whatever status it had reached:
+    exit code 1 with run_status "complete" would read as a success to the caller."""
+    meta["errors"].append({"error_type": error_type, "message": str(exc)})
+    meta["run_status"] = "failed"
+    return 1
 
 
 def create_run_dir(out_root):
@@ -213,17 +221,13 @@ def execute(args, jd_path, config_path, run_dir, log):
         exit_code = 3 if meta["run_status"] == "blocked" else (0 if meta["run_status"] == "complete" else 1)
     except LLMError as exc:
         # ConfigError, ContextBudgetError, timeouts: each carries its error_type.
-        meta["errors"].append({"error_type": exc.error_type, "message": str(exc)})
-        exit_code = 1
+        exit_code = _fail(meta, exc.error_type, exc)
     except RuntimeError as exc:
-        meta["errors"].append({"error_type": "runtime", "message": str(exc)})
-        exit_code = 1
+        exit_code = _fail(meta, "runtime", exc)
     except ValueError as exc:
-        meta["errors"].append({"error_type": "input", "message": str(exc)})
-        exit_code = 1
+        exit_code = _fail(meta, "input", exc)
     except OSError as exc:
-        meta["errors"].append({"error_type": "io", "message": str(exc)})
-        exit_code = 1
+        exit_code = _fail(meta, "io", exc)
     finally:
         meta["elapsed_seconds"] = round(time.monotonic() - started, 1)
         (run_dir / "run_meta.json").write_text(

@@ -141,5 +141,17 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn("## 失败步骤", md)
 
 
+class HonestWordingTests(unittest.TestCase):
+    def check(self, text):
+        by_id = {"M001": {"text": "I used Excel.", "scope": "personal"}}
+        return interview_prep.validate_answer([{"part": "Honest", "text": text, "basis": []}], by_id, ["M001"], "JD")
+
+    def test_forbidden_phrases_match_whole_words_only(self):
+        self.assertEqual(self.check("I lack expertise in networking and have not used it in recent years."), [])
+        self.assertTrue(self.check("I am an expert in networking."))
+        self.assertTrue(self.check("I have many years of support work."))
+        self.assertTrue(self.check("I have experience with ITIL."))
+
+
 if __name__ == "__main__":
     unittest.main()

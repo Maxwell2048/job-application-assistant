@@ -1,16 +1,20 @@
-"""Export the assembled resume (and cover letter) from a run directory to .docx
-in the layout of the author's original resume (resume/base_resume.docx).
+"""Export the assembled resume (and cover letter) from a run directory to .docx.
 
     python export_docx.py --run outputs/<run>            # resume_tailored*.md -> <Name>_Resume_<jd>_<time>.docx
     python export_docx.py --run outputs/<run> --letter   # also cover letter from cv_suggestions*.json
 
-Layout reproduced from the original: A4 with a full-width navy header band
-(name 22pt white, title line in cyan, three contact columns in pale blue),
-navy section banners with cyan "▐  TITLE" text, a three-column education
-table (dates | university | degree), project title rows with bullet items
-whose leading "Label:" is bold navy, "◆ Category  items" skill lines, and a
-two-column block for additional projects. Only the resume body is exported;
-the source appendix after the '---' rule stays in the Markdown.
+The resume uses a colour-annotated single-column A4 design: a centred header,
+uppercase section titles with a thin rule, 9.5 pt body text, native bullet
+lists and page numbers. Five kinds of span carry a colour that a hiring
+manager scans for -- blue measurable results, green technical skills, pink
+leadership and collaboration, orange career growth and a yellow key-strength
+shading. Every category is decided by the program from the text itself
+(annotate), so the generation steps and their evidence checks are untouched.
+This module builds the document from scratch: no .docx template is read.
+Cover letters keep the plainer layout. Decorative source headings are
+excluded; wording, numbers and all project bullets are retained. Only the
+resume body is exported; the source appendix after the '---' rule stays in
+the Markdown.
 """
 import argparse
 import json
@@ -20,7 +24,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
@@ -83,6 +87,8 @@ def parse_resume(lines):
             continue
         if section is None:
             continue
+        if re.match(r"^[▐▏▌]\s*", line):
+            continue
         if line.startswith("### "):
             block = {"heading": line[4:].strip(), "lines": []}
             section["blocks"].append(block)
@@ -144,13 +150,14 @@ def _table(doc, widths_cm, fill=None):
     return table
 
 
-def _run(paragraph, text, size=8, bold=False, color=INK, italic=False, spacing=None):
+def _run(paragraph, text, size=8, bold=False, color=INK, italic=False, spacing=None, underline=False):
     run = paragraph.add_run(text)
     run.font.name = FONT
     run._element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
     run.font.size = Pt(size)
     run.bold = bold
     run.italic = italic
+    run.underline = underline
     run.font.color.rgb = color
     if spacing:  # character spacing in twentieths of a point, as in the original banners
         node = OxmlElement("w:spacing")
@@ -369,36 +376,297 @@ def _generic(doc, section, bullets_bold_label=True):
                     _run(para, line["text"], size=8)
 
 
+BODY_PT = 9.5
+HEADING_PT = 10
+HEADING2_PT = 9.5
+SMALL_PT = 8.5
+NAME_PT = 22
+BLACK = RGBColor(0, 0, 0)
+MUTED = RGBColor(0x59, 0x59, 0x59)
+ROLE_INK = RGBColor(0x8A, 0x2B, 0x2B)
+LAYOUT_VERSION = "3"
+
+# The five-way colour annotation a hiring manager scans for. Every category is
+# decided by the program from the text itself, so no generation step changes.
+MARK_RESULT = RGBColor(0x1A, 0x5F, 0xB4)   # blue: measurable results
+MARK_SKILL = RGBColor(0x1A, 0x7F, 0x37)    # green: technical skills
+MARK_LEAD = RGBColor(0xC2, 0x18, 0x5B)     # pink: leadership and collaboration
+MARK_GROWTH = RGBColor(0xB4, 0x53, 0x09)   # orange: career growth
+MARK_COLOURS = {"result": MARK_RESULT, "skill": MARK_SKILL,
+                "lead": MARK_LEAD, "growth": MARK_GROWTH}
+HILITE_FILL = "FFF3B0"                     # yellow shading: key strengths
+RULE_COLOUR = "BFBFBF"
+EDGE_CM = 1.5                              # left/right margin of the clean layout
+CONTENT_CLEAN_CM = PAGE_WIDTH_CM - 2 * EDGE_CM
+
+# Technical vocabulary of this candidate's field: a match is a technical skill.
+TECH_TERMS = [
+    "sentence-transformers", "scikit-learn", "GitHub Actions", "TensorFlow/Keras",
+    "CrossEntropyLoss", "multilingual E5", "PostgreSQL", "Databricks", "Ultralytics",
+    "keras_tuner", "SQLAlchemy", "TensorFlow", "Power BI", "llama.cpp", "Qwen3 27B",
+    "PostGIS", "YOLO11n", "YOLOv8", "LabelMe", "JavaScript", "HTML/CSS", "PyTorch",
+    "FastAPI", "Flask", "Docker", "pandas", "Neo4j", "Cypher", "SQLite", "Python",
+    "BiLSTM", "AdamW", "React", "Linux", "LaTeX", "CI/CD", "NLP", "VAE", "GRU",
+    "LSTM", "CNN", "RAG", "JSON", "SQL", "Git", "W&B", "E5", "APOC", "DAX", "BoW",
+    "API", "Jupyter", "Bash", "t-SNE", "Transformer", "Attention",
+]
+TECH_RE = re.compile(r"\b(" + "|".join(re.escape(t) for t in sorted(TECH_TERMS, key=len, reverse=True)) + r")\b")
+# A count, a percentage, a latency or a score: the result a hiring manager reads.
+METRIC_RE = re.compile(
+    r"(?:\b\d[\d,]*(?:\.\d+)?\s*(?:%|percent|ms|MB|GB|K\b|QPS|epochs?|hours?|weeks?|months?|commits?|"
+    r"maps?|samples?|records?|cases?|clients?|features?)\b|\bRecall@\d|\bmAP\d*\b|\b\d+/\d+\b|\b0\.\d{3,}\b|\b\d[\d,]{2,}\b)")
+LEAD_RE = re.compile(r"\b(?:led|lead|leading|co-led|mentor\w*|coach\w*|supervis\w*|coordinated|collaborat\w*|"
+                     r"team of \d+|stakeholder\w*|cross-disciplinary|three-person team|co-developed)\b", re.I)
+GROWTH_RE = re.compile(r"\b(?:promoted|transitioned|turned|progression|career|bridge into|moved into|"
+                       r"specialis\w*|scholarship|awarded)\b", re.I)
+STRENGTH_RE = re.compile(r"\b(?:hands-on|end-to-end|privacy-preserving|evidence-based|self-learner|"
+                         r"self-starter|proven ability|bilingual|cross-cultural|strong problem-solving|"
+                         r"adaptab\w*|volunteered to)\b", re.I)
+STRENGTH_MAX_CHARS = 130
+
+
+def _shade_run(run, fill):
+    """Yellow 'key strength' shading on a run, in schema order inside rPr."""
+    rPr = run._element.get_or_add_rPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), fill)
+    rPr.insert_element_before(shd, "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang",
+                              "w:eastAsianLayout", "w:specVanish", "w:oMath")
+
+
+def _bottom_rule(paragraph, colour=RULE_COLOUR, size=6):
+    """Thin rule under a section heading, in schema order inside pPr."""
+    pPr = paragraph._p.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), str(size))
+    bottom.set(qn("w:space"), "2")
+    bottom.set(qn("w:color"), colour)
+    borders.append(bottom)
+    pPr.insert_element_before(borders, "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap",
+                              "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi",
+                              "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing",
+                              "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment",
+                              "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr",
+                              "w:pPrChange")
+
+
+def clause_kind(clause):
+    """The one category a clause belongs to, or '' when it is ordinary prose."""
+    if GROWTH_RE.search(clause):
+        return "growth"
+    if LEAD_RE.search(clause):
+        return "lead"
+    if METRIC_RE.search(clause):
+        return "result"
+    return ""
+
+
+def annotate(text, strengths=True):
+    """-> [(chunk, kind)] with kind '' (plain), result, skill, lead, growth or strength.
+
+    Clauses are classified as a whole; inside an ordinary clause only the technical
+    vocabulary is marked. Every decision comes from the text, never from the model.
+    `strengths` is off inside project sections, where the yellow shading would only
+    add noise: a key strength is a claim about the candidate, not a project fact."""
+    spans = []
+    for part in re.split(r"(?<=[;,])", text):
+        if not part:
+            continue
+        if strengths and STRENGTH_RE.search(part) and len(part) <= STRENGTH_MAX_CHARS:
+            spans.append((part, "strength"))
+            continue
+        kind = clause_kind(part)
+        if kind:
+            spans.append((part, kind))
+            continue
+        position = 0
+        for match in TECH_RE.finditer(part):
+            if match.start() > position:
+                spans.append((part[position:match.start()], ""))
+            spans.append((match.group(0), "skill"))
+            position = match.end()
+        if position < len(part):
+            spans.append((part[position:], ""))
+    return spans
+
+
+def _mark_runs(paragraph, text, size=BODY_PT, bold=False, strengths=True):
+    """Write one line with its colour annotation, one run per chunk."""
+    for chunk, kind in annotate(text, strengths):
+        if not chunk:
+            continue
+        if kind == "strength":
+            _shade_run(_run(paragraph, chunk, size=size, bold=bold, color=INK), HILITE_FILL)
+        elif kind:
+            run = _run(paragraph, chunk, size=size, bold=bold, color=MARK_COLOURS[kind])
+            run.underline = True
+        else:
+            _run(paragraph, chunk, size=size, bold=bold, color=INK)
+
+
+def _clean_contact(text):
+    return re.sub(r"^[📍✉📞⌨🔗☎✆◆]\ufe0f?\s*", "", text).strip()
+
+
+def _resume_paragraph(doc, text, *, style=None, size=BODY_PT, bold=False,
+                      before=0, after=2, keep_next=False, color=INK, align=None):
+    p = _para(doc, before=before, after=after, style=style, align=align)
+    p.paragraph_format.line_spacing = 1.06
+    p.paragraph_format.keep_with_next = keep_next
+    p.paragraph_format.keep_together = True
+    p.paragraph_format.widow_control = True
+    _run(p, text, size=size, bold=bold, color=color)
+    return p
+
+
+def _section_heading(doc, title):
+    """Uppercase section title carrying the thin rule of the colour-annotated layout."""
+    p = _resume_paragraph(doc, title.upper(), style="Heading 1", size=HEADING_PT,
+                          bold=True, before=8, after=3, keep_next=True, color=BLACK)
+    _bottom_rule(p)
+    return p
+
+
+def _resume_bullet(doc, text, strengths=True):
+    p = _para(doc, before=0, after=2, style="List Bullet")
+    p.paragraph_format.left_indent = Cm(0.45)
+    p.paragraph_format.first_line_indent = Cm(-0.25)
+    p.paragraph_format.line_spacing = 1.06
+    p.paragraph_format.keep_together = True
+    p.paragraph_format.widow_control = True
+    match = LABEL.match(text)
+    if match:
+        _run(p, match.group(1) + ": ", size=BODY_PT, bold=True, color=BLACK)
+        _mark_runs(p, match.group(2), size=BODY_PT, strengths=strengths)
+    else:
+        _mark_runs(p, text, size=BODY_PT, strengths=strengths)
+    return p
+
+
+def _education_records(section):
+    """Accept structured schools and the model's flat date/school/degree form."""
+    records, notes = [], []
+    for block in section["blocks"]:
+        if block["heading"]:
+            lines = list(block["lines"])
+            first = lines.pop(0)["text"] if lines else ""
+            degree, dates = _split_degree_line(first)
+            records.append({"school": block["heading"], "degree": degree, "dates": dates,
+                            "notes": [line["text"] for line in lines]})
+            continue
+        lines = [line["text"] for line in block["lines"]]
+        i = 0
+        while i < len(lines):
+            if (i + 2 < len(lines) and re.fullmatch(r"\d{4}(?:[./]\d{1,2})?\s*(?:[-–—]|to)\s*\d{4}(?:[./]\d{1,2})?", lines[i])):
+                records.append({"dates": lines[i], "school": lines[i + 1], "degree": lines[i + 2], "notes": []})
+                i += 3
+            else:
+                notes.append(lines[i]); i += 1
+    return records, notes
+
+
+def _education_clean(doc, section):
+    records, notes = _education_records(section)
+    for record in records:
+        p = _para(doc, before=3, after=0)
+        _run(p, record["school"], size=BODY_PT, bold=True, color=BLACK)
+        if record["dates"]:
+            p.paragraph_format.tab_stops.add_tab_stop(Cm(CONTENT_CLEAN_CM), WD_TAB_ALIGNMENT.RIGHT)
+            _run(p, "\t" + record["dates"], size=SMALL_PT, color=MUTED)
+        if record["degree"]:
+            # The degree is the career step a reader scans for: orange, like growth.
+            _run(_para(doc, after=1), record["degree"],
+                 size=BODY_PT, color=MARK_GROWTH, underline=True)
+        for note in record["notes"]:
+            _mark_runs(_para(doc, after=2), note, size=SMALL_PT, strengths=False)
+    for note in notes:
+        _mark_runs(_para(doc, after=2), note, size=SMALL_PT, strengths=False)
+
+
+def _content_clean(doc, section):
+    is_skills = "SKILL" in section["title"].upper() and "LANGUAGE" not in section["title"].upper()
+    # A key-strength shading belongs to self-description, not to project entries.
+    strengths = not re.search(r"PROJECT|EXPERIENCE", section["title"], re.I)
+    for block in section["blocks"]:
+        if block["heading"]:
+            # "Name | Type": the name is the entry, the type becomes its subtitle.
+            parts = [part.strip() for part in block["heading"].split("|", 1)]
+            heading = _para(doc, before=4, after=0, style="Heading 2")
+            heading.paragraph_format.keep_with_next = True
+            _run(heading, parts[0], size=HEADING2_PT, bold=True, color=BLACK)
+            if len(parts) > 1 and parts[1]:
+                _run(_para(doc, after=1.5), parts[1], size=SMALL_PT, italic=True, color=ROLE_INK)
+        for line in block["lines"]:
+            if line["kind"] == "bullet":
+                _resume_bullet(doc, line["text"], strengths)
+                continue
+            # Several skill categories copied from a source table may share one line.
+            pieces = [p.strip() for p in re.split(r"◆\s*", line["text"]) if p.strip()] if is_skills else [line["text"]]
+            for text in pieces:
+                match = LABEL.match(text)
+                if match is None and is_skills:
+                    match = re.match(r"^(.{2,28}?)\s{2,}(.+)$", text)
+                if match:
+                    p = _para(doc, after=2)
+                    p.paragraph_format.line_spacing = 1.06
+                    p.paragraph_format.keep_together = True
+                    _run(p, match.group(1) + ": ", size=BODY_PT, bold=True, color=BLACK)
+                    _mark_runs(p, match.group(2), size=BODY_PT, strengths=strengths)
+                else:
+                    _mark_runs(_para(doc, after=2), text, size=BODY_PT, strengths=strengths)
+
+
 def render_resume(parsed, out_path):
+    """Colour-annotated single-column A4 resume; content is never shortened here.
+
+    Which span gets which colour is decided by annotate() from the text itself,
+    so no generation step changes and the same Markdown always renders alike."""
     doc = Document()
     section = doc.sections[0]
     section.page_width, section.page_height = Cm(PAGE_WIDTH_CM), Cm(29.7)
-    section.left_margin = section.right_margin = Cm(MARGIN_CM)
-    section.top_margin, section.bottom_margin = Cm(0.9), Cm(0.9)
-    normal = doc.styles["Normal"]
-    normal.font.name = FONT
-    normal.font.size = Pt(8)
-    normal.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
-    for stray in doc.paragraphs:  # python-docx may start with an empty paragraph
-        stray._p.getparent().remove(stray._p)
-
-    _header(doc, parsed)
+    section.left_margin = section.right_margin = Cm(EDGE_CM)
+    section.top_margin, section.bottom_margin = Cm(1.15), Cm(1.15)
+    for style_name, size in (("Normal", BODY_PT), ("Title", NAME_PT), ("Heading 1", HEADING_PT), ("Heading 2", HEADING2_PT), ("List Bullet", BODY_PT)):
+        style = doc.styles[style_name]
+        style.font.name = FONT
+        style.font.size = Pt(size)
+        style.font.color.rgb = BLACK
+        style.font.bold = style_name in ("Title", "Heading 1", "Heading 2")
+        style.paragraph_format.space_after = Pt(2)
+        style.paragraph_format.line_spacing = 1.06
+        style.paragraph_format.widow_control = True
+        style.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
+        if style.element.pPr is not None:
+            for border in list(style.element.pPr.findall(qn("w:pBdr"))):
+                style.element.pPr.remove(border)
+    _resume_paragraph(doc, parsed["name"], style="Title", size=NAME_PT, bold=True, after=1,
+                      color=BLACK, align=WD_ALIGN_PARAGRAPH.CENTER)
+    if parsed["title"]:
+        _resume_paragraph(doc, parsed["title"], size=SMALL_PT, after=2, color=MUTED,
+                          align=WD_ALIGN_PARAGRAPH.CENTER)
+    contacts = [text for text in (_clean_contact(raw) for raw in parsed["contact"]) if text]
+    for start in range(0, len(contacts), 2):
+        _resume_paragraph(doc, "  |  ".join(contacts[start:start + 2]), size=SMALL_PT, after=1,
+                          color=MUTED, align=WD_ALIGN_PARAGRAPH.CENTER)
     for sec in parsed["sections"]:
-        key = sec["title"].strip().upper()
-        _banner(doc, sec["title"])
-        if key == "EDUCATION":
-            _education(doc, sec)
-        elif "PROJECT" in key and ("ADDITIONAL" in key or "OTHER" in key):
-            _two_columns(doc, sec["blocks"],
-                         lambda cell, block: _project_block(cell, block, title_size=8.5,
-                                                            keep_heading=False))
-        elif "PROJECT" in key or "EXPERIENCE" in key:
-            for block in sec["blocks"]:
-                _project_block(doc, block)
-        elif "SKILL" in key and "LANGUAGE" not in key:
-            _skills(doc, sec)
+        _section_heading(doc, sec["title"])
+        if sec["title"].strip().upper() == "EDUCATION":
+            _education_clean(doc, sec)
         else:
-            _generic(doc, sec)
+            _content_clean(doc, sec)
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _run(footer, "", size=9, color=MUTED)
+    for instruction in ("PAGE", "NUMPAGES"):
+        if instruction == "NUMPAGES":
+            _run(footer, " / ", size=9, color=MUTED)
+        field = OxmlElement("w:fldSimple"); field.set(qn("w:instr"), instruction)
+        footer._p.append(field)
+    doc.core_properties.comments = "Resume layout version " + LAYOUT_VERSION
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     doc.save(out_path)
     return out_path
@@ -526,7 +794,7 @@ def export_run(run_dir, with_letter=False, resume_md=None, label=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="把组装好的简历导出为 Word（沿用原版排版）")
+    parser = argparse.ArgumentParser(description="把组装好的简历导出为 Word（统一清晰的单栏版式）")
     parser.add_argument("--run", required=True, type=Path)
     parser.add_argument("--md", type=Path, default=None, help="指定 resume_tailored*.md，默认最新")
     parser.add_argument("--letter", action="store_true", help="同时导出 Cover Letter")
