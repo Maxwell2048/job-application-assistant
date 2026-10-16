@@ -4,6 +4,7 @@ subprocesses: the generation itself is replaced by a stub."""
 import json
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -137,6 +138,41 @@ class QueueTests(WorkerCase):
             self.worker._thread.join(2)
         self.assertEqual(self.ran, [])
         self.assertEqual(self.status_of(job_id), "queued")
+
+
+class ShutdownTests(WorkerCase):
+    def test_stop_waits_for_final_database_write(self):
+        entered, release, stopping, stopped = (threading.Event() for _ in range(4))
+
+        def run_full(task, jd_text=None):
+            entered.set()
+            release.wait(5)
+            task.status = "done"
+            self.worker._persist(task)
+
+        self.worker.pipeline.run_full = run_full
+        task = self.worker.submit_full(jd_name="shutdown", jd_path=self.root / "x")
+        self.worker.start()
+        self.assertTrue(entered.wait(2))
+
+        def stop():
+            stopping.set()
+            self.worker.stop()
+            stopped.set()
+
+        stopper = threading.Thread(target=stop)
+        stopper.start()
+        try:
+            self.assertTrue(stopping.wait(2))
+            self.assertFalse(stopped.wait(0.05), "stop returned while the DB write was pending")
+        finally:
+            release.set()
+            stopper.join(5)
+        self.assertFalse(stopper.is_alive())
+        self.assertTrue(stopped.is_set())
+        self.assertFalse(self.worker._thread.is_alive())
+        with self.sessions() as session:
+            self.assertEqual(session.get(TaskRow, task.id).status, "done")
 
 
 class RecoveryTests(WorkerCase):
