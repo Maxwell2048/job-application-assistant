@@ -409,5 +409,23 @@ class RunGuardTests(unittest.TestCase):
                 tailor_cv.load_run(run)
 
 
+class StaleCitationTests(unittest.TestCase):
+    def test_saved_citations_are_checked_against_the_current_library(self):
+        by_id = {"M001": {"text": "Annotated 12 sample maps in LabelMe format."},
+                 "RESUME": {"text": "Master of IT"}}
+        saved = {"projects": [{"bullets": [{"text": "x", "basis": [
+                     {"material_id": "M001", "quote": "Annotated 12 sample maps"}]}]}],
+                 "summary": {"text": "y", "basis": [{"material_id": "RESUME", "quote": "Master of IT"}]},
+                 "cover_letter": []}
+        self.assertEqual(tailor_cv.stale_citations(saved, by_id), [])
+        # the library changed: M001 is now another section, and an id disappeared
+        shifted = {"M001": {"text": "Built a Flask forum module."}, "RESUME": {"text": "Master of IT"}}
+        problems = tailor_cv.stale_citations(saved, shifted)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("M001", problems[0])
+        saved["cover_letter"] = [{"text": "z", "basis": [{"material_id": "M099", "quote": "gone"}]}]
+        self.assertEqual(len(tailor_cv.stale_citations(saved, by_id)), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

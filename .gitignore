@@ -18,8 +18,23 @@ config.local.json
 /_sources/
 /_review/
 site/
-.claude/
 *.log
 .env
 .env.*
+!.env.example
 private_patterns*.json
+
+# Local runtime and generated artifacts
+/state/*
+!/state/.gitignore
+/output/
+config.docker.json
+/frontend/node_modules/
+/frontend/dist/
+/frontend/*.tsbuildinfo
+/frontend/vite.config.js
+/frontend/vite.config.d.ts
+.seek_cache/
+seek_output/
+_seek_*.txt
+.seek_*.json

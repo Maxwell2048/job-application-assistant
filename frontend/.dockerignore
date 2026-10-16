@@ -1,0 +1,4 @@
+# The image installs its own Linux node_modules with `npm ci`; the host's copy
+# (other OS, native binaries) must not overwrite it at `COPY . .`.
+node_modules/
+dist/

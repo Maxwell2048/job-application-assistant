@@ -13,16 +13,19 @@ sending. Output: resume_tailored.md / .json next to the suggestions.
 import argparse
 import datetime
 import json
+import copy
+import re
 import sys
+import zipfile
 from pathlib import Path
 
 from local_llm import LLMError, build_llm, load_config
 from tailor_cv import (RESUME_ID, KIND_LABELS, UNVERIFIED_KINDS, CVTailor, _attach_sources, latest_output,
-                       load_materials, load_run, non_english, read_resume, requirement_summary, validate_basis,
+                       load_materials, load_run, read_resume, requirement_summary, stale_citations, validate_basis, non_english,
                        unique_output)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-BUILD_PROMPT_VERSION = "1"
+BUILD_PROMPT_VERSION = "2"
 MAX_LINE_CHARS = 500
 # Page budget enforced by the program: models ignore 'keep it short' guidance.
 MAX_KEY_PROJECTS, MAX_KEY_BULLETS = 5, 4
@@ -44,7 +47,10 @@ tailored_projects（针对本岗位已生成并核对过来源的项目要点，
    title 为空时，自己给出英文标题。
 7. 全文英文，任何一行都不得出现中文或全角标点（程序会逐行检查）；整份简历控制在两页以内：KEY PROJECTS 最多 5 个项目、每个最多 4 条要点，ADDITIONAL/OTHER PROJECTS 最多 3 个项目、每个最多 2 条要点；按与岗位的相关度排序，最相关的放前面。超出的部分程序会按顺序裁掉。
 8. 任何一行都不出现课程代码（CITS5505、GENG5505 之类）；项目标题只保留名称与类型，底稿标题里的课程代码要去掉。
-9. 输出紧凑 JSON：不缩进、不换行、不加 Markdown 代码围栏，避免输出过长被截断。"""
+9. 输出紧凑 JSON：不缩进、不换行、不加 Markdown 代码围栏，避免输出过长被截断。
+10. 本次最终组装只选择 reference_catalog 中已有 id，每行仅输出 kind 和 ref。禁止输出 text、basis、material_id；程序从已验证素材回填这些字段。SUMMARY 是 ref，不是 material_id。项目标题使用 H 开头的 ref，底稿行使用 R 开头的 ref。
+示例：{"sections":[{"title":"Header","lines":[{"kind":"text","ref":"R001"}]},{"title":"Summary","lines":[{"kind":"text","ref":"SUMMARY"}]},{"title":"KEY PROJECTS","lines":[{"kind":"heading","ref":"H01"},{"kind":"bullet","ref":"B01"}]}]}。
+只使用 reference_catalog 里实际存在的 id，不照抄示例里不存在的编号。"""
 
 RESUME_SCHEMA = {
     "type": "object",
@@ -95,6 +101,36 @@ def referenced_lines(suggestions):
     return refs
 
 
+def assembly_references(suggestions, resume_entry):
+    """Selectable facts and upstream-validated titles, with program-owned citations."""
+    refs = referenced_lines(suggestions)
+    for index, project in enumerate(suggestions.get("projects", []), 1):
+        title = project.get("title")
+        bullets = project.get("bullets") or []
+        if title and not non_english(title) and bullets and bullets[0].get("basis"):
+            refs[f"H{index:02d}"] = {"text": title, "basis": [
+                {"material_id": b["material_id"], "quote": b["quote"]} for b in bullets[0]["basis"]]}
+    for index, raw in enumerate(resume_entry["text"].splitlines(), 1):
+        raw = raw.strip()
+        if not raw or re.match(r"^[▐▏▌]\s*", raw):
+            continue
+        # Strip course identifiers deterministically; the citation stays verbatim.
+        text = re.sub(r"\b[A-Z]{4}\d{4}\b\s*[:|–—-]?\s*", "", raw).strip()
+        if text and not non_english(text):
+            refs[f"R{index:03d}"] = {"text": text, "basis": [{"material_id": RESUME_ID, "quote": raw}]}
+    return refs
+
+
+def assembly_schema(refs):
+    """The model selects IDs; source text/citations are never regenerated."""
+    schema = copy.deepcopy(RESUME_SCHEMA)
+    line = schema["properties"]["sections"]["items"]["properties"]["lines"]["items"]
+    line["required"] = ["kind", "ref"]
+    line["properties"] = {"kind": line["properties"]["kind"],
+                          "ref": {"type": "string", "enum": list(refs)}}
+    return schema
+
+
 def build_payload(suggestions, materials, resume_entry, jd_text):
     profile = [{"material_id": m["material_id"], "section": m["section"], "text": m["text"]}
                for m in materials if m["kind"] == "profile"]
@@ -109,7 +145,9 @@ def build_payload(suggestions, materials, resume_entry, jd_text):
         # (often Chinese) name and must never be copied into the resume.
         projects.append({"title": p.get("title") or None, "material_name": p["project"], "bullets": bullets})
     return {
-        "task_note": "组装最终英文简历。tailored_projects 的要点与 summary 用 ref 引用 id，程序回填文本与来源。",
+        "task_note": "只选 reference_catalog 的 id。每行输出 kind+ref；程序回填已验证的文本和来源，不重写内容或引用。",
+        "reference_catalog": [{"id": key, "text": entry["text"]}
+                              for key, entry in assembly_references(suggestions, resume_entry).items()],
         "jd_text": jd_text,
         "base_resume": {"material_id": RESUME_ID, "text": resume_entry["text"]},
         "profile": profile,
@@ -222,9 +260,11 @@ def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=No
     by_id = {m["material_id"]: m for m in materials}
     allowed = allowed_material_ids(suggestions, materials)
     payload = build_payload(suggestions, materials, resume_entry, jd_text)
+    refs = assembly_references(suggestions, resume_entry)
+    schema = assembly_schema(refs)
 
     def fits():
-        return llm.estimate_context("build_resume", SYSTEM_PROMPT, payload, RESUME_SCHEMA) \
+        return llm.estimate_context("build_resume", SYSTEM_PROMPT, payload, schema) \
             <= llm.prompt_char_budget
     if not fits():
         # Shed the least essential context first: review reasons, then the JD body.
@@ -235,8 +275,7 @@ def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=No
         raise LLMError("组装简历的请求超出提示词预算，请调大 context_budget 或减少项目数",
                        error_type="context_budget")
     required = required_lines(suggestions, resume_entry["text"])
-    refs = referenced_lines(suggestions)
-    data = llm.generate_json("build_resume", SYSTEM_PROMPT, payload, RESUME_SCHEMA,
+    data = llm.generate_json("build_resume", SYSTEM_PROMPT, payload, schema,
                              timeout_seconds,
                              validate=lambda d: validate_document(d, by_id, allowed, jd_text,
                                                                   required, refs))
@@ -357,10 +396,15 @@ def main(argv=None):
         resume_text = read_resume(args.resume)
         config = load_config(args.config)
         llm = build_llm(config)
-    except (OSError, ValueError, LLMError, KeyError) as exc:
+    except (OSError, ValueError, LLMError, KeyError, zipfile.BadZipFile) as exc:
         print(f"错误：{exc}", file=sys.stderr)
-        return 1
+        return 2  # unusable input, nothing written
     materials, by_project, resume_entry = load_materials(args.data, resume_text)
+    stale = stale_citations(suggestions, {m["material_id"]: m for m in materials})
+    if stale:
+        print(f"错误：{Path(suggestions_path).name} 里有 {len(stale)} 处引用与当前经历库对不上（例如 {stale[0]}）；"
+              "经历库在那之后改过，请重新运行 tailor_cv.py", file=sys.stderr)
+        return 2
     print(f"[build-resume] 使用 {Path(suggestions_path).name}，材料 {len(materials)} 条；组装中……",
           file=sys.stderr)
     summary_note = ensure_summary(llm, suggestions, matches, jd_text, materials, by_project, resume_entry,

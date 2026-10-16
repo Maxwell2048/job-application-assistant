@@ -591,6 +591,23 @@ def redo_closing(llm, result, matches, jd_text, materials, by_project, resume_en
     return result
 
 
+def stale_citations(suggestions, by_id):
+    """Citations of a saved suggestions file that no longer hold in the current
+    library. Material ids are positional (M001, M002, ... in file and section
+    order), so after sections are added or removed an old id can point at a
+    different text or at nothing; the stored quote tells the two apart."""
+    items = [b for p in suggestions.get("projects", []) for b in p.get("bullets", [])]
+    items += [suggestions["summary"]] if suggestions.get("summary") else []
+    items += suggestions.get("cover_letter", [])
+    problems = []
+    for item in items:
+        for basis in item.get("basis", []):
+            material = by_id.get(basis.get("material_id"))
+            if material is None or not quote_in(basis.get("quote", ""), material["text"]):
+                problems.append(f"{basis.get('material_id')}：{basis.get('quote', '')[:40]!r}")
+    return problems
+
+
 def _attach_sources(item, by_id):
     basis = []
     for b in item.get("basis", []):
@@ -742,9 +759,9 @@ def main(argv=None):
         resume_text = read_resume(args.resume)
         config = load_config(args.config)
         llm = build_llm(config)
-    except (OSError, ValueError, LLMError, KeyError) as exc:
+    except (OSError, ValueError, LLMError, KeyError, zipfile.BadZipFile) as exc:
         print(f"错误：{exc}", file=sys.stderr)
-        return 1
+        return 2  # nothing written; 1 is reserved for "partial, files written"
     materials, by_project, resume_entry = load_materials(args.data, resume_text)
     print(f"[tailor-cv] 材料 {len(materials)} 条，项目 {len(by_project)} 个，"
           f"要求 {len(matches)} 条；开始生成……", file=sys.stderr)
@@ -752,8 +769,14 @@ def main(argv=None):
         previous = latest_output(args.run, "cv_suggestions", ".json")
         if previous is None:
             print(f"错误：{args.run} 里没有 cv_suggestions*.json；先完整运行一次", file=sys.stderr)
-            return 1
-        result = redo_closing(llm, json.loads(previous.read_text(encoding="utf-8")), matches, jd_text,
+            return 2
+        earlier = json.loads(previous.read_text(encoding="utf-8"))
+        stale = stale_citations(earlier, {m["material_id"]: m for m in materials})
+        if stale:
+            print(f"错误：{previous.name} 里有 {len(stale)} 处引用与当前经历库对不上（例如 {stale[0]}）；"
+                  "经历库在那之后改过，请去掉 --letter-only 重新生成", file=sys.stderr)
+            return 2
+        result = redo_closing(llm, earlier, matches, jd_text,
                               materials, by_project, resume_entry, config.get("timeout_seconds"))
     else:
         result = tailor(llm, meta, matches, jd_text, materials, by_project, resume_entry,
