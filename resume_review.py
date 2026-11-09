@@ -24,7 +24,7 @@ def review_projects(llm, sections, jd_text, timeout_seconds=None):
                   for n, start in enumerate(starts)]
         targets.append((idx, blocks))
     if not targets:
-        return result, []
+        return result, ["AI project ordering review skipped: no project section with at least two project blocks."]
     notes = []
     for index, blocks in targets:
         ids = [f"P{i+1}" for i in range(len(blocks))]
@@ -41,7 +41,11 @@ def review_projects(llm, sections, jd_text, timeout_seconds=None):
                 raise ValueError("Invalid project order")
             by_id = dict(zip(ids, blocks))
             result[index]["lines"] = [line for key in review["order"] for line in by_id[key]]
+            before = [block[0].get("text", "") for block in blocks]
+            after = [by_id[key][0].get("text", "") for key in review["order"]]
             notes.append("AI project ordering review: " + review["reason"][:500])
+            notes.append("Project order before review: " + " | ".join(before))
+            notes.append("Project order after review: " + " | ".join(after))
         except (LLMError, ValueError, KeyError, TypeError) as exc:
             notes.append("AI project ordering review unavailable; original order retained: " + str(exc)[:240])
     return result, notes

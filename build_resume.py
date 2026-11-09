@@ -389,6 +389,7 @@ def main(argv=None):
     parser.add_argument("--suggestions", type=Path, default=None,
                         help="cv_suggestions*.json，默认取运行目录里最新的一份")
     parser.add_argument("--data", type=Path, default=PROJECT_ROOT / "experiences")
+    parser.add_argument("--skip-review", action="store_true", help="Skip the optional AI project-order review")
     args = parser.parse_args(argv)
     try:
         meta, matches, jd_text = load_run(args.run)
@@ -418,7 +419,11 @@ def main(argv=None):
     except LLMError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
-    sections, review_notes = review_projects(llm, sections, jd_text, config.get("timeout_seconds"))
+    if args.skip_review:
+        review_notes = ["AI project ordering review skipped by user."]
+    else:
+        print("[build-resume] Reviewing project relevance...", file=sys.stderr)
+        sections, review_notes = review_projects(llm, sections, jd_text, config.get("timeout_seconds"))
     out_md = unique_output(args.run, "resume_tailored")
     sections, trim_notes = trim_projects(sections)
     trim_notes = review_notes + trim_notes

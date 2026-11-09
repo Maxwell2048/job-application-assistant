@@ -18,8 +18,16 @@ class ResumeReviewTests(unittest.TestCase):
         self.assertEqual([x["text"] for x in out[0]["lines"]], ["B", "Beta", "A", "Alpha"])
         self.assertEqual(out[0]["lines"][1]["basis"], [{"quote":"source2"}])
         self.assertEqual(self.sections[0]["lines"][0]["text"], "A")
+        self.assertIn("A | B", notes[1])
+        self.assertIn("B | A", notes[2])
     def test_invalid_or_failed_review_preserves_all_lines(self):
         for order in (["P2", "P2"], ["P1"], None):
             out, notes = review_projects(Reviewer(order), self.sections, "Python")
             self.assertEqual(out, self.sections)
             self.assertIn("original order retained", notes[0])
+
+    def test_no_eligible_projects_is_reported(self):
+        sections = [{"title": "Education", "lines": [{"kind": "text", "text": "Degree"}]}]
+        result, notes = review_projects(Reviewer(None), sections, "Python")
+        self.assertEqual(result, sections)
+        self.assertIn("skipped", notes[0])
