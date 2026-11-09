@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path
 
 from local_llm import LLMError, build_llm, load_config
+from resume_review import review_projects
 from tailor_cv import (RESUME_ID, KIND_LABELS, UNVERIFIED_KINDS, CVTailor, _attach_sources, latest_output,
                        load_materials, load_run, read_resume, requirement_summary, stale_citations, validate_basis, non_english,
                        unique_output)
@@ -417,8 +418,10 @@ def main(argv=None):
     except LLMError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
+    sections, review_notes = review_projects(llm, sections, jd_text, config.get("timeout_seconds"))
     out_md = unique_output(args.run, "resume_tailored")
     sections, trim_notes = trim_projects(sections)
+    trim_notes = review_notes + trim_notes
     if summary_note:
         trim_notes = [summary_note, *trim_notes]
     out_md.write_text(render(sections, suggestions_path, args.resume, meta, trim_notes),

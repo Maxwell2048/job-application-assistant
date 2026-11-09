@@ -22,7 +22,7 @@ INCLUDE_FILES = [
     "frontend/tsconfig.json", "frontend/tsconfig.app.json", "frontend/tsconfig.node.json", "frontend/.gitignore",
     "frontend/.oxlintrc.json", "frontend/Dockerfile", "frontend/.dockerignore", "frontend/nginx.conf",
     "frontend/public/favicon.svg",
-    "add_jd.py", "build_resume.py", "build_site.py", "evidence_matcher.py", "export_docx.py",
+    "add_jd.py", "build_resume.py", "resume_review.py", "build_site.py", "evidence_matcher.py", "export_docx.py",
     "import_uwa_kb.py", "interview_prep.py", "jd_parser.py", "job_identity.py", "job_summary.py", "local_llm.py",
     "location_gate.py", "match_job.py", "report_writer.py", "search_experience.py", "tailor_cv.py",
     "docs/jd_matcher_spec.md",
@@ -32,7 +32,7 @@ INCLUDE_FILES = [
 # Tests that need only synthetic data. test_eval_set.py and eval_set.json refer
 # to the private corpus and stay out.
 INCLUDE_TESTS = [
-    "test_add_jd.py", "test_build_resume.py", "test_build_site.py", "test_evidence_matcher.py",
+    "test_add_jd.py", "test_build_resume.py", "test_resume_review.py", "test_build_site.py", "test_evidence_matcher.py",
     "test_export_docx.py", "test_import_uwa_kb.py", "test_interview_prep.py", "test_jd_parser.py",
     "test_job_identity.py", "test_job_summary.py", "test_local_llm.py", "test_match_job.py", "test_report_writer.py",
     "test_retriever.py", "test_sources.py", "test_tailor_cv.py",
