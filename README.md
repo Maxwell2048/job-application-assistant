@@ -314,3 +314,5 @@ MIT License, see [LICENSE](LICENSE). Model and dependency licenses remain separa
 ### Evidence-preserving project review
 
 After assembly, the local model reviews project relevance against the job description and can reorder existing project blocks. The review only accepts a complete permutation of the supplied project IDs: text, citations, metrics and project ownership remain unchanged. If the review fails or returns an invalid order, the original order is retained and the outcome is recorded in the resume's source appendix. This adds a model request; it does not verify factual claims independently or rewrite resume language. Review the generated application before use.
+
+The resume source appendix records the project order before and after a successful review. When running `build_resume.py` directly, pass `--skip-review` to preserve the assembled order for comparison. The review is skipped if no project section has at least two project blocks.
