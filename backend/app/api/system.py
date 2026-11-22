@@ -5,6 +5,7 @@ import queue
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from ..core.code_version import changed_files
 from .deps import get_settings, get_worker
 from .schemas import HealthOut, SettingsOut
 
@@ -15,7 +16,8 @@ router = APIRouter(prefix="/api", tags=["system"])
 def health(worker=Depends(get_worker), settings=Depends(get_settings)):
     online, model = worker.model_online()
     return HealthOut(online=online, model=model if online else None, queue=worker.queue_status(),
-                     autopilot_enabled=settings.autopilot_enabled)
+                     autopilot_enabled=settings.autopilot_enabled,
+                     restart_needed=changed_files(settings.project_root))
 
 
 @router.post("/model/start", status_code=202)

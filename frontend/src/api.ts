@@ -6,6 +6,9 @@ export type Stage = { key: string; label: string; status: string; seconds: numbe
 export type RunSummary = {
   archived?: boolean
   job_status?: string | null
+  job_application_status?: "submitted" | "unsubmitted" | null
+  job_submitted_run_id?: string | null
+  job_submitted_at?: string | null
   run_id: string
   has_resume?: boolean
   generation_date?: string | null
@@ -24,7 +27,39 @@ export type RunSummary = {
   downloads: string[]
   can_interview: boolean
   missing?: boolean
+  /** cv_suggestions exist: summary/letter can be rewritten and the resume reassembled */
+  has_suggestions?: boolean
+  /** quality_report.py result; null before the first report */
+  quality?: Quality | null
+  /** application-form answers, newest first */
+  answers?: Answer[]
 }
+
+export type QualityCheck = { key: string; label: string; level: 'ok' | 'warn' | 'bad'; detail: string }
+
+export type Quality = {
+  level: 'ok' | 'warn' | 'bad'
+  issues: number
+  checks: QualityCheck[]
+  job_family?: string | null
+  llm?: { calls?: number; seconds?: number; retries?: number; failed?: number; failure_types?: Record<string, number>
+    by_task?: Record<string, { calls: number; seconds: number; retries: number; failed: number }> }
+}
+
+export type Answer = {
+  id: string
+  question: string
+  max_words: number
+  created_at: string
+  status: 'complete' | 'error'
+  words?: number
+  answer?: { text: string }[]
+  to_confirm?: string[]
+  error?: string
+}
+
+/** tailor: continue a run the coverage gate stopped; closing: rewrite summary and cover letter */
+export type RedoStep = 'tailor' | 'closing' | 'assemble' | 'export'
 
 export type Task = {
   id: string
@@ -37,6 +72,7 @@ export type Task = {
   run_id: string | null
   stages: Stage[]
   run?: RunSummary | null
+  redo?: RedoStep | null
 }
 
 export type Coverage = {
@@ -110,6 +146,8 @@ export type Health = {
   /** paused: why the queue is waiting (the model is offline), or '' */
   queue: { current: Task | null; waiting: string[]; paused?: string }
   autopilot_enabled: boolean
+  /** project files the running backend loaded that changed since it started: restart to use them */
+  restart_needed?: string[]
 }
 
 /** focused: graduate/junior/entry level/trainee keywords; broad: every ICT job in Perth */
@@ -222,6 +260,10 @@ export const api = {
   resumes: () => request<RunSummary[]>('/api/runs?resumes_only=true&limit=5000'),
   setApplication: (runId: string, submitted: boolean) =>
     request<RunSummary>(`/api/runs/${runId}/application`, { method: 'PUT', body: JSON.stringify({ submitted }) }),
+  redo: (runId: string, step: RedoStep) =>
+    request<Task>(`/api/runs/${runId}/redo`, { method: 'POST', body: JSON.stringify({ step }) }),
+  answer: (runId: string, question: string, max_words: number) =>
+    request<Task>(`/api/runs/${runId}/answers`, { method: 'POST', body: JSON.stringify({ question, max_words }) }),
   doc: (runId: string, name: string) => request<{ html: string; markdown: string }>(`/api/runs/${runId}/docs/${name}`),
   downloadUrl: (runId: string, file: string) => `/api/runs/${runId}/download/${encodeURIComponent(file)}`,
   autopilot: () => request<AutopilotStatus>('/api/autopilot/status'),
@@ -229,7 +271,7 @@ export const api = {
     request<{ mode: SearchMode }>('/api/autopilot/mode', { method: 'POST', body: JSON.stringify({ mode }) }),
   setAutoGenerate: (enabled: boolean) =>
     request<{ auto_generate: boolean }>('/api/autopilot/generate', { method: 'POST', body: JSON.stringify({ enabled }) }),
-  generateReady: () => request<{ queued: number }>('/api/jobs/generate-ready', { method: 'POST' }),
+  generateReady: (level: 'default' | 'mid' | 'senior' = 'default') => request<{ queued: number }>(`/api/jobs/generate-ready?level=${level}`, { method: 'POST' }),
   tick: (body: { max_pages?: number; max_details?: number; sources?: string[]; mode?: SearchMode; generate?: boolean }) =>
     request<{ started: boolean }>('/api/autopilot/tick', { method: 'POST', body: JSON.stringify(body) }),
   reports: () => request<TickReport[]>('/api/autopilot/reports'),

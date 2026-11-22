@@ -141,7 +141,7 @@ class SubmitTests(ApiTestCase):
         self.assertIn("partial", task["stages"][2]["message"])
         self.assertEqual(task["stages"][4]["message"], "2 个文件 · 公司：Acme；职位：Data Engineer")
         self.assertEqual(runner.calls, ["match_job.py", "tailor_cv.py", "build_resume.py", "job_identity.py",
-                                        "export_docx.py", "interview_prep.py"])
+                                        "export_docx.py", "quality_report.py", "interview_prep.py"])
         self.assertEqual(runner.export_args[-2:], ["--label", "acme"])
         self.assertTrue(list(self.jobs_dir.glob("*-acme.txt")))
         run = task["run"]
