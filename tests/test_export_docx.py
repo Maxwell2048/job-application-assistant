@@ -114,8 +114,8 @@ B.Eng. Food Science (2020.09 – 2024.06)
                  ("2020.09 – 2024.06", "Wuhan Polytechnic University, China", "B.Eng. Food Science")])
             self.assertEqual(records[0]["notes"], ["Coursework: Machine Learning"])
             text = "\n".join(p.text for p in doc.paragraphs)
-            self.assertIn("University of Western Australia\t2024.02 – 2026.06", text)
-            self.assertIn("Wuhan Polytechnic University, China\t2020.09 – 2024.06", text)
+            self.assertIn("University of Western Australia — Master of IT · AI Track\t2024.02 – 2026.06", text)
+            self.assertIn("Wuhan Polytechnic University, China — B.Eng. Food Science\t2020.09 – 2024.06", text)
             self.assertIn("Coursework: Machine Learning", text)
 
     def test_degree_without_dates_stays_in_education_table(self):
@@ -143,25 +143,23 @@ B.Eng. Food Science (2020.09 – 2024.06)
             texts = [p.text for p in paras if p.text.strip()]
             name = next(p for p in paras if p.text == "ALEX SAMPLE")
             self.assertEqual(name.style.name, "Title")
-            self.assertEqual(name.runs[0].font.size.pt, 22)
+            self.assertEqual(name.runs[0].font.size.pt, 20)
             self.assertEqual(str(name.runs[0].font.color.rgb), "000000")
-            self.assertIn("Perth, WA  |  someone@example.com", texts)
+            self.assertTrue(any("Perth, WA  |  someone@example.com" in t for t in texts))
             heading = next(p for p in paras if p.text == "EDUCATION")
             self.assertEqual(heading.style.name, "Heading 1")
             self.assertTrue(heading.paragraph_format.keep_with_next)
             self.assertEqual(doc.tables, [])
             self.assertTrue(any("2024.02 – 2026.06" in t for t in texts))
-            self.assertIn("Master of IT · AI Track", texts)
+            self.assertTrue(any("Master of IT · AI Track" in t for t in texts))
             bullet = next(p for p in paras if p.text.startswith("Model: "))
             self.assertEqual(bullet.style.name, "List Bullet")
-            self.assertEqual(bullet.runs[0].font.size.pt, 9.5)
-            self.assertTrue(bullet.paragraph_format.keep_together)
+            self.assertEqual(bullet.runs[0].font.size.pt, 11)
+            self.assertFalse(bullet.paragraph_format.keep_together)
             self.assertIn("Languages: Python · SQL", texts)
-            # "Name | Type" becomes its own entry line plus a subtitle line
-            self.assertIn("GeoMind", texts)
-            self.assertIn("Object Detection", texts)
-            self.assertIn("CyberWin", texts)
-            self.assertIn("Requirements", texts)
+            # Keep the project name and type together without adding another paragraph.
+            self.assertIn("GeoMind | Object Detection", texts)
+            self.assertIn("CyberWin | Requirements", texts)
             for style_name in ("Title", "Heading 1", "Heading 2"):
                 ppr = doc.styles[style_name].element.pPr
                 self.assertTrue(ppr is None or ppr.find(qn("w:pBdr")) is None)
@@ -258,8 +256,8 @@ class ResumeLayoutRegressionTests(unittest.TestCase):
         self.assertEqual(parsed["sections"][0]["blocks"][0]["lines"][0]["text"], "One fact.")
 
 
-class ColourAnnotationTests(unittest.TestCase):
-    """The five-way colour annotation is decided by the program from the text alone."""
+class LegacyAnnotationAndCleanLayoutTests(unittest.TestCase):
+    """Legacy classification remains available; final resumes stay unannotated."""
 
     def kinds(self, text):
         return [kind for _, kind in export_docx.annotate(text) if kind]
@@ -285,7 +283,7 @@ class ColourAnnotationTests(unittest.TestCase):
         line = "Led the migration, cutting p99 latency from 180ms to 62ms, using PyTorch."
         self.assertEqual("".join(chunk for chunk, _ in export_docx.annotate(line)), line)
 
-    def test_rendered_runs_carry_the_colours_and_keep_every_character(self):
+    def test_rendered_runs_are_monochrome_and_keep_every_character(self):
         md = ("# ALEX SAMPLE\n## KEY PROJECTS\n### Finance Planner | Flask Web App\n"
               "- Rebuilt the service with PyTorch, cutting p99 latency from 180ms to 62ms.\n")
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,31 +292,29 @@ class ColourAnnotationTests(unittest.TestCase):
             doc = Document(output)
             bullet = next(p for p in doc.paragraphs if p.text.startswith("Rebuilt the service"))
             self.assertEqual(bullet.text, "Rebuilt the service with PyTorch, cutting p99 latency from 180ms to 62ms.")
-            self.assertIn("1A7F37", {str(r.font.color.rgb) for r in bullet.runs})   # green: technical skill
-            blue = [r for r in bullet.runs if str(r.font.color.rgb) == "1A5FB4"]   # blue: measurable result
-            self.assertTrue(blue)
-            self.assertTrue(all(r.underline for r in blue))
+            self.assertEqual({str(r.font.color.rgb) for r in bullet.runs}, {"000000"})
+            self.assertFalse(any(r.underline or self.shaded(r) for r in bullet.runs))
 
-    def test_section_heading_carries_the_thin_rule(self):
+    def test_section_heading_uses_a_thin_neutral_separator(self):
         md = "# ALEX SAMPLE\n## SUMMARY\nA graduate.\n"
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "resume.docx"
             export_docx.markdown_to_docx(md.splitlines(), output)
             doc = Document(output)
             heading = next(p for p in doc.paragraphs if p.text == "SUMMARY")
-            self.assertIsNotNone(heading._p.pPr.find(qn("w:pBdr")))
+            self.assertEqual(heading._p.pPr.find(qn("w:pBdr")).find(qn("w:bottom")).get(qn("w:color")), "BFBFBF")
 
     @staticmethod
     def shaded(run):
         return run._element.rPr is not None and run._element.rPr.find(qn("w:shd")) is not None
 
-    def test_key_strength_is_shaded_in_self_description(self):
+    def test_self_description_has_no_highlights(self):
         md = "# ALEX SAMPLE\n## SUMMARY\nHands-on experience with end-to-end delivery.\n"
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "resume.docx"
             export_docx.markdown_to_docx(md.splitlines(), output)
             line = next(p for p in Document(output).paragraphs if p.text.startswith("Hands-on"))
-            self.assertTrue(any(self.shaded(r) for r in line.runs))
+            self.assertFalse(any(self.shaded(r) for r in line.runs))
 
     def test_key_strength_is_off_inside_project_sections(self):
         md = ("# ALEX SAMPLE\n## KEY PROJECTS\n### Finance Planner | Web App\n"
@@ -328,3 +324,25 @@ class ColourAnnotationTests(unittest.TestCase):
             export_docx.markdown_to_docx(md.splitlines(), output)
             bullet = next(p for p in Document(output).paragraphs if p.text.startswith("Built a privacy"))
             self.assertFalse(any(self.shaded(r) for r in bullet.runs))
+
+
+class PlainResumeExportTests(unittest.TestCase):
+    def test_all_resume_sections_are_unannotated_and_only_project_facts_have_bullets(self):
+        md = ("# ALEX SAMPLE\n## SUMMARY\n- Hands-on Python developer with 95% test accuracy.\n"
+              "## EDUCATION\n### Example University\nMaster of IT | 2024 – 2026\n"
+              "## KEY PROJECTS\n### Project A | API Development\n- Led a Python team and processed 1,234 records.\n"
+              "## TECHNICAL SKILLS\n- Languages: Python and SQL\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "resume.docx"
+            export_docx.markdown_to_docx(md.splitlines(), path)
+            doc = Document(path)
+            for paragraph in doc.paragraphs:
+                self.assertFalse(paragraph.text.startswith(("•", "▪", "■")))
+                for run in paragraph.runs:
+                    self.assertIn(str(run.font.color.rgb), {"000000", "595959"})
+                    self.assertFalse(run.underline)
+                    rpr = run._element.rPr
+                    self.assertTrue(rpr is None or (rpr.find(qn("w:shd")) is None and rpr.find(qn("w:highlight")) is None))
+            bullets = [p.text for p in doc.paragraphs if p.style.name == "List Bullet"]
+            self.assertEqual(bullets, ["Led a Python team and processed 1,234 records."])
+            self.assertTrue(any("95%" in p.text for p in doc.paragraphs))

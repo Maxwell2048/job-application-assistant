@@ -3,13 +3,9 @@
     python export_docx.py --run outputs/<run>            # resume_tailored*.md -> <Name>_Resume_<jd>_<time>.docx
     python export_docx.py --run outputs/<run> --letter   # also cover letter from cv_suggestions*.json
 
-The resume uses a colour-annotated single-column A4 design: a centred header,
-uppercase section titles with a thin rule, 9.5 pt body text, native bullet
-lists and page numbers. Five kinds of span carry a colour that a hiring
-manager scans for -- blue measurable results, green technical skills, pink
-leadership and collaboration, orange career growth and a yellow key-strength
-shading. Every category is decided by the program from the text itself
-(annotate), so the generation steps and their evidence checks are untouched.
+The resume uses a plain single-column A4 design with black body text,
+consistent headings, readable spacing and native bullets for project facts.
+Semantic colours, highlighting and underlines are not applied to resumes.
 This module builds the document from scratch: no .docx template is read.
 Cover letters keep the plainer layout. Decorative source headings are
 excluded; wording, numbers and all project bullets are retained. Only the
@@ -17,6 +13,7 @@ resume body is exported; the source appendix after the '---' rule stays in
 the Markdown.
 """
 import argparse
+from resume_skills import apply_to_export
 import json
 import re
 import sys
@@ -376,18 +373,18 @@ def _generic(doc, section, bullets_bold_label=True):
                     _run(para, line["text"], size=8)
 
 
-BODY_PT = 9.5
-HEADING_PT = 10
-HEADING2_PT = 9.5
-SMALL_PT = 8.5
-NAME_PT = 22
+BODY_PT = 11
+HEADING_PT = 11.5
+HEADING2_PT = 11
+SMALL_PT = 9.5
+NAME_PT = 20
 BLACK = RGBColor(0, 0, 0)
 MUTED = RGBColor(0x59, 0x59, 0x59)
 ROLE_INK = RGBColor(0x8A, 0x2B, 0x2B)
-LAYOUT_VERSION = "3"
+LAYOUT_VERSION = "6"
 
-# The five-way colour annotation a hiring manager scans for. Every category is
-# decided by the program from the text itself, so no generation step changes.
+# Legacy annotation helpers are retained for compatibility. The resume renderer
+# deliberately does not apply these annotations to application documents.
 MARK_RESULT = RGBColor(0x1A, 0x5F, 0xB4)   # blue: measurable results
 MARK_SKILL = RGBColor(0x1A, 0x7F, 0x37)    # green: technical skills
 MARK_LEAD = RGBColor(0xC2, 0x18, 0x5B)     # pink: leadership and collaboration
@@ -396,7 +393,7 @@ MARK_COLOURS = {"result": MARK_RESULT, "skill": MARK_SKILL,
                 "lead": MARK_LEAD, "growth": MARK_GROWTH}
 HILITE_FILL = "FFF3B0"                     # yellow shading: key strengths
 RULE_COLOUR = "BFBFBF"
-EDGE_CM = 1.5                              # left/right margin of the clean layout
+EDGE_CM = 1.6                              # left/right margin of the clean layout
 CONTENT_CLEAN_CM = PAGE_WIDTH_CM - 2 * EDGE_CM
 
 # Technical vocabulary of this candidate's field: a match is a technical skill.
@@ -495,17 +492,15 @@ def annotate(text, strengths=True):
 
 
 def _mark_runs(paragraph, text, size=BODY_PT, bold=False, strengths=True):
-    """Write one line with its colour annotation, one run per chunk."""
-    for chunk, kind in annotate(text, strengths):
-        if not chunk:
-            continue
-        if kind == "strength":
-            _shade_run(_run(paragraph, chunk, size=size, bold=bold, color=INK), HILITE_FILL)
-        elif kind:
-            run = _run(paragraph, chunk, size=size, bold=bold, color=MARK_COLOURS[kind])
-            run.underline = True
-        else:
-            _run(paragraph, chunk, size=size, bold=bold, color=INK)
+    """Write unannotated resume text; strengths is a legacy compatibility flag."""
+    position = 0
+    for match in re.finditer(r"(?<![\w@])\d[\d,]*(?:\.\d+)?(?:/\d+)?%?(?!\w)", text):
+        if match.start() > position:
+            _run(paragraph, text[position:match.start()], size=size, bold=bold, color=BLACK)
+        _run(paragraph, match.group(), size=size, bold=True, color=BLACK)
+        position = match.end()
+    if position < len(text):
+        _run(paragraph, text[position:], size=size, bold=bold, color=BLACK)
 
 
 def _clean_contact(text):
@@ -515,28 +510,29 @@ def _clean_contact(text):
 def _resume_paragraph(doc, text, *, style=None, size=BODY_PT, bold=False,
                       before=0, after=2, keep_next=False, color=INK, align=None):
     p = _para(doc, before=before, after=after, style=style, align=align)
-    p.paragraph_format.line_spacing = 1.06
+    p.paragraph_format.line_spacing = 1.1
     p.paragraph_format.keep_with_next = keep_next
-    p.paragraph_format.keep_together = True
+    p.paragraph_format.keep_together = False
     p.paragraph_format.widow_control = True
     _run(p, text, size=size, bold=bold, color=color)
     return p
 
 
 def _section_heading(doc, title):
-    """Uppercase section title carrying the thin rule of the colour-annotated layout."""
+    """Separate compact sections with a neutral rule, as in the supplied reference."""
     p = _resume_paragraph(doc, title.upper(), style="Heading 1", size=HEADING_PT,
                           bold=True, before=8, after=3, keep_next=True, color=BLACK)
-    _bottom_rule(p)
+    _bottom_rule(p, colour="BFBFBF", size=4)
     return p
 
 
 def _resume_bullet(doc, text, strengths=True):
-    p = _para(doc, before=0, after=2, style="List Bullet")
+    p = _para(doc, before=0, after=3, style="List Bullet")
     p.paragraph_format.left_indent = Cm(0.45)
     p.paragraph_format.first_line_indent = Cm(-0.25)
-    p.paragraph_format.line_spacing = 1.06
-    p.paragraph_format.keep_together = True
+    p.paragraph_format.tab_stops.add_tab_stop(Cm(0.45))
+    p.paragraph_format.line_spacing = 1.1
+    p.paragraph_format.keep_together = False
     p.paragraph_format.widow_control = True
     match = LABEL.match(text)
     if match:
@@ -572,15 +568,12 @@ def _education_records(section):
 def _education_clean(doc, section):
     records, notes = _education_records(section)
     for record in records:
-        p = _para(doc, before=3, after=0)
-        _run(p, record["school"], size=BODY_PT, bold=True, color=BLACK)
+        p = _resume_paragraph(doc, record["school"], before=3, after=1, bold=True, color=BLACK)
+        if record["degree"]:
+            _run(p, " — " + record["degree"], size=BODY_PT, color=BLACK)
         if record["dates"]:
             p.paragraph_format.tab_stops.add_tab_stop(Cm(CONTENT_CLEAN_CM), WD_TAB_ALIGNMENT.RIGHT)
             _run(p, "\t" + record["dates"], size=SMALL_PT, color=MUTED)
-        if record["degree"]:
-            # The degree is the career step a reader scans for: orange, like growth.
-            _run(_para(doc, after=1), record["degree"],
-                 size=BODY_PT, color=MARK_GROWTH, underline=True)
         for note in record["notes"]:
             _mark_runs(_para(doc, after=2), note, size=SMALL_PT, strengths=False)
     for note in notes:
@@ -595,13 +588,14 @@ def _content_clean(doc, section):
         if block["heading"]:
             # "Name | Type": the name is the entry, the type becomes its subtitle.
             parts = [part.strip() for part in block["heading"].split("|", 1)]
-            heading = _para(doc, before=4, after=0, style="Heading 2")
+            heading = _para(doc, before=6, after=1, style="Heading 2")
             heading.paragraph_format.keep_with_next = True
             _run(heading, parts[0], size=HEADING2_PT, bold=True, color=BLACK)
             if len(parts) > 1 and parts[1]:
-                _run(_para(doc, after=1.5), parts[1], size=SMALL_PT, italic=True, color=ROLE_INK)
+                _run(heading, " | " + parts[1], size=SMALL_PT, color=MUTED)
         for line in block["lines"]:
-            if line["kind"] == "bullet":
+            plain_section = bool(re.search(r"SUMMARY|PROFILE|OBJECTIVE|SKILL|LANGUAGE", section["title"], re.I))
+            if line["kind"] == "bullet" and not plain_section:
                 _resume_bullet(doc, line["text"], strengths)
                 continue
             # Several skill categories copied from a source table may share one line.
@@ -612,8 +606,8 @@ def _content_clean(doc, section):
                     match = re.match(r"^(.{2,28}?)\s{2,}(.+)$", text)
                 if match:
                     p = _para(doc, after=2)
-                    p.paragraph_format.line_spacing = 1.06
-                    p.paragraph_format.keep_together = True
+                    p.paragraph_format.line_spacing = 1.1
+                    p.paragraph_format.keep_together = False
                     _run(p, match.group(1) + ": ", size=BODY_PT, bold=True, color=BLACK)
                     _mark_runs(p, match.group(2), size=BODY_PT, strengths=strengths)
                 else:
@@ -621,15 +615,13 @@ def _content_clean(doc, section):
 
 
 def render_resume(parsed, out_path):
-    """Colour-annotated single-column A4 resume; content is never shortened here.
-
-    Which span gets which colour is decided by annotate() from the text itself,
-    so no generation step changes and the same Markdown always renders alike."""
+    """Plain single-column A4 resume; preserve all wording and numerical claims."""
+    parsed = apply_to_export(parsed)
     doc = Document()
     section = doc.sections[0]
     section.page_width, section.page_height = Cm(PAGE_WIDTH_CM), Cm(29.7)
     section.left_margin = section.right_margin = Cm(EDGE_CM)
-    section.top_margin, section.bottom_margin = Cm(1.15), Cm(1.15)
+    section.top_margin, section.bottom_margin = Cm(1.3), Cm(1.3)
     for style_name, size in (("Normal", BODY_PT), ("Title", NAME_PT), ("Heading 1", HEADING_PT), ("Heading 2", HEADING2_PT), ("List Bullet", BODY_PT)):
         style = doc.styles[style_name]
         style.font.name = FONT
@@ -637,8 +629,11 @@ def render_resume(parsed, out_path):
         style.font.color.rgb = BLACK
         style.font.bold = style_name in ("Title", "Heading 1", "Heading 2")
         style.paragraph_format.space_after = Pt(2)
-        style.paragraph_format.line_spacing = 1.06
+        style.paragraph_format.line_spacing = 1.1
         style.paragraph_format.widow_control = True
+        style.paragraph_format.keep_together = False
+        style.paragraph_format.keep_with_next = style_name in ("Heading 1", "Heading 2")
+        style.font.underline = False
         style.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
         if style.element.pPr is not None:
             for border in list(style.element.pPr.findall(qn("w:pBdr"))):
@@ -649,15 +644,25 @@ def render_resume(parsed, out_path):
         _resume_paragraph(doc, parsed["title"], size=SMALL_PT, after=2, color=MUTED,
                           align=WD_ALIGN_PARAGRAPH.CENTER)
     contacts = [text for text in (_clean_contact(raw) for raw in parsed["contact"]) if text]
-    for start in range(0, len(contacts), 2):
-        _resume_paragraph(doc, "  |  ".join(contacts[start:start + 2]), size=SMALL_PT, after=1,
+    if contacts:
+        _resume_paragraph(doc, "  |  ".join(contacts), size=9, after=2,
                           color=MUTED, align=WD_ALIGN_PARAGRAPH.CENTER)
     for sec in parsed["sections"]:
+        start = len(doc.paragraphs)
         _section_heading(doc, sec["title"])
         if sec["title"].strip().upper() == "EDUCATION":
             _education_clean(doc, sec)
         else:
             _content_clean(doc, sec)
+        # A short supporting section should not leave its final bullet alone
+        # on the next page. Group only bounded sections, without forcing a break.
+        if re.search(r"(?:ADDITIONAL|OTHER).*PROJECT|^(?:TECHNICAL\s+)?SKILLS$", sec["title"], re.I):
+            words = sum(len(line["text"].split()) for b in sec["blocks"] for line in b["lines"])
+            if len(sec["blocks"]) <= 2 and words <= 180:
+                paragraphs = doc.paragraphs[start:]
+                for index, paragraph in enumerate(paragraphs):
+                    paragraph.paragraph_format.keep_together = True
+                    paragraph.paragraph_format.keep_with_next = index < len(paragraphs) - 1
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     _run(footer, "", size=9, color=MUTED)

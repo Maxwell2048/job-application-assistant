@@ -22,7 +22,7 @@ from pathlib import Path
 from local_llm import LLMError, build_llm, load_config
 from tailor_cv import (IMPORTANCE_LABELS, KIND_LABELS, NUMBER, VERDICT_LABELS,
                        jd_name_number, latest_output, load_materials, load_run, number_supported, personal_ids,
-                       unique_output, validate_basis)
+                       unique_output, validate_basis, visible_materials)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 INTERVIEW_PROMPT_VERSION = "1"
@@ -173,8 +173,8 @@ def validate_answer(points, by_id, allowed, jd_text, label="第 {index} 个 poin
 
 
 def _visible(entries):
-    return [{"material_id": e["material_id"], "kind": e["kind"], "scope": e.get("scope", "personal"),
-             "project": e["project"], "section": e["section"], "text": e["text"]} for e in entries]
+    # Provenance lines (证据：…) stay out of the prompt; quotes are checked against the full text.
+    return visible_materials(entries, with_project=True)
 
 
 def _requirement_payload(match):

@@ -62,6 +62,54 @@ def satisfied_alternatives(matches, groups):
             for rid in g.get("requirement_ids", []) if rid not in supported}
 
 
+QUALIFICATION_CATEGORIES = {"education", "work_authorization", "location", "certification"}
+
+
+def normalize_summary(data, matches, groups):
+    """Apply the rule-based urgency and study limits in place; return notes.
+
+    These limits follow from saved judgments, not from the model's wording, so
+    the program enforces them instead of rejecting otherwise usable advice:
+    pending items only ask for confirmation, supported items and satisfied OR
+    alternatives are never urgent study, qualification conditions get no study
+    plan, and study items without a concrete exercise lose the study list.
+    Unknown or duplicate IDs are dropped; missing IDs stay a validation error.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("advice"), list):
+        return []
+    by_id = {m["requirement_id"]: m for m in matches}
+    alternatives = satisfied_alternatives(matches, groups)
+    notes, seen, kept = [], set(), []
+    for a in data["advice"]:
+        if not isinstance(a, dict):
+            continue
+        rid = a.get("requirement_id")
+        if rid not in by_id or rid in seen:
+            notes.append(f"{rid} 不属于本次要求或重复，已删除")
+            continue
+        seen.add(rid)
+        kept.append(a)
+        m = by_id[rid]
+        state = evidence_state(m)
+        if state == "pending":
+            if a.get("urgency") != "confirm_first" or a.get("knowledge_points") or a.get("exercise"):
+                notes.append(f"{rid} 待复核：改为先确认，不安排补课")
+            a.update(urgency="confirm_first", knowledge_points=[], exercise="")
+            continue
+        if m.get("category") in QUALIFICATION_CATEGORIES and (a.get("knowledge_points") or a.get("exercise")):
+            notes.append(f"{rid} 是资格/地点条件：去掉补课内容，改为先核实资料")
+            a.update(knowledge_points=[], exercise="", urgency="confirm_first")
+        if a.get("urgency") == "before_apply" and (state == "supported" or rid in alternatives):
+            notes.append(f"{rid} 已有支持或 OR 已满足：由投递前改为面试前准备")
+            a["urgency"] = "before_interview"
+        if a.get("knowledge_points") and (not str(a.get("exercise", "")).strip()
+                                          or not str(a.get("acceptance_check", "")).strip()):
+            notes.append(f"{rid} 的学习建议缺少练习或完成标准：去掉知识点清单")
+            a["knowledge_points"] = []
+    data["advice"] = kept
+    return notes
+
+
 def validate_summary(data, matches, groups):
     errors = validate_against_schema(data, SCHEMA)
     if errors:
@@ -102,8 +150,13 @@ def generate_summary(llm, matches, groups=None, run_status="complete"):
     try:
         if not matches:
             raise ValueError("没有可总结的匹配结果")
-        data = llm.generate_json("job_readiness_summary", PROMPT, payload, SCHEMA,
-                                 validate=lambda d: validate_summary(d, matches, groups))
+        notes = []
+
+        def check(d):
+            # Normalize first: only structural problems and missing IDs cost an attempt.
+            notes[:] = normalize_summary(d, matches, groups) if not validate_against_schema(d, SCHEMA) else []
+            return validate_summary(d, matches, groups)
+        data = llm.generate_json("job_readiness_summary", PROMPT, payload, SCHEMA, validate=check)
         errors = validate_summary(data, matches, groups)
         if errors:
             raise ValueError("；".join(errors))
@@ -116,6 +169,8 @@ def generate_summary(llm, matches, groups=None, run_status="complete"):
                          knowledge_points=[], exercise="", acceptance_check="确认来源及判断后再安排准备。",
                          urgency="confirm_first")
         result.update(status="complete", **data)
+        if notes:
+            result["normalized"] = notes
         result["model"] = llm.model if hasattr(llm, "model") else None
     except (LLMError, ValueError, RuntimeError, OSError, TypeError, KeyError) as exc:
         result["error"] = str(exc)
