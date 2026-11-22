@@ -20,37 +20,38 @@ import zipfile
 from pathlib import Path
 
 from local_llm import LLMError, build_llm, load_config
-from tailor_cv import (RESUME_ID, KIND_LABELS, UNVERIFIED_KINDS, CVTailor, _attach_sources, latest_output,
+from job_family import HEADLINES, headline_for, job_family, job_title  # noqa: F401 (re-exported)
+from resume_skills import apply_to_sections
+from resume_review import review_projects
+from tailor_cv import (WORK_TYPE, RESUME_ID, KIND_LABELS, UNVERIFIED_KINDS, CVTailor, _attach_sources, latest_output,
                        load_materials, load_run, read_resume, requirement_summary, stale_citations, validate_basis, non_english,
                        unique_output)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-BUILD_PROMPT_VERSION = "2"
+BUILD_PROMPT_VERSION = "7"
 MAX_LINE_CHARS = 500
 # Page budget enforced by the program: models ignore 'keep it short' guidance.
-MAX_KEY_PROJECTS, MAX_KEY_BULLETS = 5, 4
-MAX_ADDITIONAL_PROJECTS, MAX_ADDITIONAL_BULLETS = 3, 2
+MAX_KEY_PROJECTS, MAX_KEY_BULLETS = 4, 4
+MAX_ADDITIONAL_PROJECTS, MAX_ADDITIONAL_BULLETS = 2, 2
+MAX_SKILL_LINES = 6  # guidance; supported skill facts are not silently deleted
 
-SYSTEM_PROMPT = """你把已经写好的素材组装成一份完整的英文简历，不是重新创作。
-素材：base_resume（现有简历底稿全文，material_id=RESUME）、profile（本人自述基本事实）、summary（已生成的摘要）、
-tailored_projects（针对本岗位已生成并核对过来源的项目要点，附 basis）、review（对底稿每段的处理建议：keep/move_up/move_down/trim/remove）、gaps（不要声称具备的要求）。
-规则：
-1. 输出 sections 列表，按简历顺序；每个 section 有 title 和 lines；每行 kind 为 heading（项目名/学校等子标题）、bullet（要点）或 text（普通行）。
-2. 来自 tailored_projects 的要点和 summary 只写 ref（要点的 id，如 "B07"；摘要为 "SUMMARY"），不要重抄 text 和 basis，程序会回填。
-   其他行（底稿或 profile 里的内容）必须给 text 与 basis：material_id 与该材料中逐字连续的 quote；底稿里保留的行 quote 就是该行原文；trim 的行改写后 quote 用原句开头。
-3. review 标 remove 的段落不要出现；trim 的段落缩短但不新增事实；move_up/move_down 体现在顺序上。
-4. 不得新增素材里没有的事实、数字、工具或职位；gaps 里的要求不要声称具备。JD 措辞不能当 quote。
-5. 第一个 section 的第一行必须是底稿的第一行（姓名）原文；联系方式、学历、语言等信息来自底稿或 profile，逐字引用。
-   summary 若提供，必须作为一个 section 出现，text 原样照抄并沿用其 basis。
-6. 同一项目不要重复出现：底稿中与 tailored_projects 同名的项目用 tailored 版本替换。
-   tailored_projects 的子标题（heading）逐字使用它的 title；material_name 只是材料里的中文名，绝不能写进简历。
-   title 为空时，自己给出英文标题。
-7. 全文英文，任何一行都不得出现中文或全角标点（程序会逐行检查）；整份简历控制在两页以内：KEY PROJECTS 最多 5 个项目、每个最多 4 条要点，ADDITIONAL/OTHER PROJECTS 最多 3 个项目、每个最多 2 条要点；按与岗位的相关度排序，最相关的放前面。超出的部分程序会按顺序裁掉。
-8. 任何一行都不出现课程代码（CITS5505、GENG5505 之类）；项目标题只保留名称与类型，底稿标题里的课程代码要去掉。
-9. 输出紧凑 JSON：不缩进、不换行、不加 Markdown 代码围栏，避免输出过长被截断。
-10. 本次最终组装只选择 reference_catalog 中已有 id，每行仅输出 kind 和 ref。禁止输出 text、basis、material_id；程序从已验证素材回填这些字段。SUMMARY 是 ref，不是 material_id。项目标题使用 H 开头的 ref，底稿行使用 R 开头的 ref。
-示例：{"sections":[{"title":"Header","lines":[{"kind":"text","ref":"R001"}]},{"title":"Summary","lines":[{"kind":"text","ref":"SUMMARY"}]},{"title":"KEY PROJECTS","lines":[{"kind":"heading","ref":"H01"},{"kind":"bullet","ref":"B01"}]}]}。
-只使用 reference_catalog 里实际存在的 id，不照抄示例里不存在的编号。"""
+SYSTEM_PROMPT = """Arrange an English resume by selecting existing reference IDs. Do not write new resume text.
+Return one complete JSON object matching the schema. Each line has exactly two fields: kind and ref.
+kind is the string "heading", "bullet" or "text". ref is a string ID from reference_catalog.
+Never output a schema definition as a value. Close every object and array. Do not include commentary or Markdown fences.
+The program inserts the verified text and citations for each selected ID.
+Use a Header section first; its first line must reference the candidate name. Keep contact details in Header.
+Include SUMMARY unchanged in its own Summary section when supplied.
+Use the H reference for each project heading and that project's own B references for its bullets.
+Choose 3–4 relevant main projects with 2–4 bullets each; optionally add 1–2 supporting projects with 1–2 bullets each.
+These are upper bounds, not quotas. Avoid duplicate projects and irrelevant detail. Aim for a clean one-to-two-page resume.
+Preserve useful Education, Skills and Languages from R references. Course codes have already been removed.
+Respect review actions for base-resume lines: omit remove entries and prioritize move_up entries.
+Do not select old project bullets from the base resume when a tailored version exists.
+Use short English section titles. ID text, facts, personal ownership and metric qualifiers must remain unchanged.
+Example shape only: {"sections":[{"title":"Header","lines":[{"kind":"text","ref":"R001"}]}]}
+Use only IDs actually present in reference_catalog; do not copy an example ID if it is absent.
+"""
 
 RESUME_SCHEMA = {
     "type": "object",
@@ -160,6 +161,24 @@ def build_payload(suggestions, materials, resume_entry, jd_text):
     }
 
 
+def compact_assembly_payload(payload):
+    """One copy of each verified line; assembly selects IDs, never rewrites facts.
+
+    Full profile, base resume and project text duplicate the catalog and create
+    conflicting citation-writing instructions for smaller local models.
+    """
+    return {
+        "reference_catalog": payload["reference_catalog"],
+        "summary_ref": "SUMMARY" if payload.get("summary") else None,
+        "projects": [{"heading_ref": f"H{index:02d}",
+                      "bullet_refs": [bullet["id"] for bullet in project["bullets"]]}
+                     for index, project in enumerate(payload["tailored_projects"], 1)],
+        "review": [{"quote": entry["quote"], "action": entry["action"]}
+                   for entry in payload["review"]],
+        "jd_text": payload["jd_text"][:1500],
+    }
+
+
 def allowed_material_ids(suggestions, materials):
     ids = [RESUME_ID] + [m["material_id"] for m in materials if m["kind"] == "profile"]
     for p in suggestions.get("projects", []):
@@ -256,10 +275,75 @@ def ensure_summary(llm, suggestions, matches, jd_text, materials, by_project, re
     return "SUMMARY 是组装时补生成的（定制建议那一步没有产出摘要）"
 
 
-def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=None):
+def assemble_verified_references(suggestions, resume_entry, refs):
+    """Deterministic layout after malformed model output, using existing facts only.
+
+    Project order was chosen upstream from the job match. Never repair a broken
+    JSON fragment or invent missing content. Fail closed if core sections cannot
+    be identified in this base resume.
+    """
+    groups = {"Header": [], "Education": [], "Skills": [], "Languages": []}
+    current = "Header"
+    for index, raw in enumerate(resume_entry["text"].splitlines(), 1):
+        raw = raw.strip()
+        heading = re.sub(r"^[▐▏▌]\s*", "", raw).strip().upper()
+        if heading == "EDUCATION":
+            current = "Education"
+            continue
+        if heading == "TECHNICAL SKILLS":
+            current = "Skills"
+            continue
+        if heading.startswith("LANGUAGES"):
+            current = "Languages"
+            continue
+        if heading.startswith(("KEY PROJECTS", "OTHER PROJECTS", "SELF-ASSESSMENT")):
+            current = None
+            continue
+        if current == "Languages" and heading == "CREATIVE & MEDIA SKILLS":
+            current = None
+        ref = f"R{index:03d}"
+        if not current or ref not in refs or not raw:
+            continue
+        if any(r.get("action") == "remove" and r.get("quote", "").strip()
+               and r["quote"].strip() in raw for r in suggestions.get("resume_review", [])):
+            continue
+        if current == "Languages" and heading == "LANGUAGE PROFICIENCY":
+            continue
+        # Keep flat date/school/degree triples intact for the DOCX education parser.
+        kind = "text"
+        groups[current].append({"kind": kind, "ref": ref})
+    if not groups["Header"] or not groups["Education"] or not groups["Skills"]:
+        raise LLMError("模型组装失败，且底稿缺少可识别的姓名、教育或技能章节，无法安全自动组装", error_type="structure")
+    sections = [{"title": "Header", "lines": groups["Header"]}]
+    if "SUMMARY" in refs:
+        sections.append({"title": "Summary", "lines": [{"kind": "text", "ref": "SUMMARY"}]})
+    main, extra, counter, selected = [], [], 0, 0
+    for index, project in enumerate(suggestions.get("projects", []), 1):
+        bullets = []
+        for bullet in project.get("bullets", []):
+            counter += 1
+            ref = f"B{counter:02d}"
+            if ref in refs:
+                bullets.append({"kind": "bullet", "ref": ref})
+        heading = f"H{index:02d}"
+        if heading not in refs or not bullets or selected >= 5:
+            continue
+        target, limit = (main, 3) if selected < 3 else (extra, 1)
+        target.extend([{"kind": "heading", "ref": heading}, *bullets[:limit]])
+        selected += 1
+    if not main:
+        raise LLMError("没有已验证且具有英文标题的项目，无法安全自动组装", error_type="structure")
+    sections.append({"title": "Key Projects", "lines": main})
+    if extra:
+        sections.append({"title": "Additional Relevant Projects", "lines": extra})
+    sections.extend({"title": title, "lines": groups[title]} for title in ("Education", "Skills", "Languages") if groups[title])
+    return {"sections": sections}
+
+
+def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=None, notes=None):
     by_id = {m["material_id"]: m for m in materials}
     allowed = allowed_material_ids(suggestions, materials)
-    payload = build_payload(suggestions, materials, resume_entry, jd_text)
+    payload = compact_assembly_payload(build_payload(suggestions, materials, resume_entry, jd_text))
     refs = assembly_references(suggestions, resume_entry)
     schema = assembly_schema(refs)
 
@@ -275,10 +359,23 @@ def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=No
         raise LLMError("组装简历的请求超出提示词预算，请调大 context_budget 或减少项目数",
                        error_type="context_budget")
     required = required_lines(suggestions, resume_entry["text"])
-    data = llm.generate_json("build_resume", SYSTEM_PROMPT, payload, schema,
-                             timeout_seconds,
-                             validate=lambda d: validate_document(d, by_id, allowed, jd_text,
-                                                                  required, refs))
+    try:
+        data = llm.generate_json("build_resume", SYSTEM_PROMPT, payload, schema,
+                                 timeout_seconds,
+                                 validate=lambda d: validate_document(d, by_id, allowed, jd_text,
+                                                                      required, refs))
+    except LLMError as exc:
+        if exc.error_type != "structure":
+            raise
+        data = assemble_verified_references(suggestions, resume_entry, refs)
+        errors = validate_document(data, by_id, allowed, jd_text, required, refs)
+        if errors:
+            raise LLMError("程序组装未通过校验：" + "；".join(errors[:3]), error_type="structure") from exc
+        note = "模型组装结构失败，已按岗位相关顺序使用已验证引用自动组装；未补写事实或修复残缺 JSON。"
+        print(f"[build-resume] {note}", file=sys.stderr)
+        if notes is not None:
+            notes.append(note)
+    place_work_experience(data, suggestions, materials, refs, notes)
     sections = []
     for section in data["sections"]:
         lines = []
@@ -292,6 +389,281 @@ def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=No
             clean = {k: v for k, v in line.items() if k != "_from_ref"}
             lines.append({**clean, "basis": basis})
         sections.append({"title": section["title"], "lines": lines})
+    sections = target_headline(sections, jd_text, materials, resume_entry, notes)
+    for line in sections[0]["lines"] if sections else []:
+        for b in line.get("basis", []):
+            if "kind" not in b:  # program-chosen headline: attach source details like other lines
+                m = by_id[b["material_id"]]
+                b.update(kind=m["kind"], source=m["source"], section=m["section"],
+                         line_start=m["line_start"], line_end=m["line_end"])
+        line.pop("_from_ref", None)
+    sections = drop_self_assessment(sections, resume_entry, notes)
+    sections = keep_base_skills(sections, resume_entry, notes)
+    family = job_family(job_title(jd_text))
+    return apply_to_sections(normalize_headings(sections), resume_entry, jd_text,
+                             declared_first=family == "ai", research_last=family not in ("ai", None),
+                             extra_lines=productivity_line(jd_text, materials) + networking_line(jd_text, materials))
+
+
+# Where each headline term is stated, for the citation (base resume, else profile).
+HEADLINE_SOURCES = {"Master of IT Graduate": "resume:Master of IT", "Data & Analytics": "resume:Data Warehousing",
+                    "Requirements Analysis": "profile:requirements analysis", "Microsoft 365": "profile:Microsoft 365",
+                    "Windows": "profile:Windows", "Business Intelligence": "resume:Business Intelligence",
+                    "Software Development": "resume:Flask"}
+
+
+def _headline_basis(headline, materials, resume_text):
+    """Verbatim lines that state each headline term; None if any term lacks one."""
+    basis = []
+    for term in [t.strip() for t in headline.split("·")]:
+        kind, _, needle = HEADLINE_SOURCES.get(term, "resume").partition(":")
+        needle = needle or term
+        pools = [("resume", RESUME_ID, resume_text)] if kind == "resume" else []
+        pools += [("profile", m["material_id"], m["text"]) for m in materials if m["kind"] == "profile"]
+        found = None
+        for _, mid, text in pools:
+            # Prefer the skills table rows ('◆ ...') over project tech lines that merely contain the word.
+            candidates = sorted(text.splitlines(), key=lambda l: not l.strip().startswith("◆"))
+            line = next((l.strip() for l in candidates
+                         if re.search(r"(?<![A-Za-z])" + re.escape(needle) + r"(?![A-Za-z])", l, re.I)), None)
+            if line:
+                found = {"material_id": mid, "quote": line}
+                break
+        if found is None:
+            return None
+        if found not in basis:
+            basis.append(found)
+    return basis
+
+
+def target_headline(sections, jd_text, materials, resume_entry, notes=None):
+    """Replace the base headline (Header line after the name) with one for the job
+    family, or restore the base headline when the assembly dropped it."""
+    if not sections or sections[0]["title"].strip().upper() != "HEADER":
+        return sections
+    header = sections[0]["lines"]
+    base_lines = [l.strip() for l in resume_entry["text"].splitlines() if l.strip()]
+    if len(base_lines) < 2:
+        return sections
+    base = base_lines[1]
+    plain = re.sub(r"^[▐▏▌]\s*", "", base)
+    # Only a "Role  ·  Area" line is a headline; a section title or contact line is not.
+    if "·" not in base and "|" not in base or plain.upper() == plain \
+            or re.match(r"^[📍✉📞⌨☎@]|^https?:|@\S+\.", base):
+        return sections
+    family = job_family(job_title(jd_text))
+    chosen = headline_for(family) or base
+    basis = [{"material_id": RESUME_ID, "quote": base}] if chosen == base else \
+        _headline_basis(chosen, materials, resume_entry["text"])
+    if basis is None:
+        chosen, basis = base, [{"material_id": RESUME_ID, "quote": base}]
+    line = {"kind": "text", "text": chosen, "basis": basis, "_from_ref": "HEADLINE"}
+    index = next((i for i, l in enumerate(header) if l.get("text", "").strip() == base), None)
+    if index is None:
+        index = 1 if header else 0
+        header.insert(index, line)
+    else:
+        header[index] = line
+    if notes is not None and chosen != base:
+        notes.append(f"Headline targeted to job family '{family}': {chosen}")
+    return sections
+
+
+PRODUCTIVITY = "Productivity & Collaboration: Microsoft 365 · Excel · Word · PowerPoint · Outlook · SharePoint · Windows"
+PRODUCTIVITY_JD = re.compile(r"microsoft 365|\bm365\b|office 365|microsoft office|\bms office\b|(?-i:\bExcel\b)|"
+                             r"(?-i:\bOutlook\b)|sharepoint|(?-i:\bWindows\b)", re.I)
+
+
+def productivity_line(jd_text, materials):
+    """A user-level Microsoft 365 / Windows skills row for jobs that ask for it,
+    and for IT and business-systems roles, where it is relevant unasked.
+
+    The base resume has no such row; the profile states user-level proficiency
+    (not tenant administration), so the row lists applications only."""
+    family = job_family(job_title(jd_text))
+    if not PRODUCTIVITY_JD.search(jd_text or "") and family not in ("it", "business"):
+        return []
+    basis = []
+    for needle in ("Microsoft 365", "Windows"):
+        for m in materials:
+            if m["kind"] != "profile":
+                continue
+            line = next((l.strip() for l in m["text"].splitlines()
+                         if needle in l and re.search(r"精通|熟练", l)), None)
+            if line:
+                basis.append({"material_id": m["material_id"], "quote": line, "kind": m["kind"],
+                              "source": m["source"], "section": m["section"],
+                              "line_start": m["line_start"], "line_end": m["line_end"]})
+                break
+    return [{"kind": "text", "text": PRODUCTIVITY, "basis": basis}] if len(basis) == 2 else []
+
+
+NETWORKING = "Home Networking: Asuswrt-Merlin Firmware · QoS · DNS · Port Forwarding · VPN · Network Troubleshooting"
+NETWORKING_JD = re.compile(r"\bnetwork|\brouter|\bwi-?fi\b|\bdns\b|\bvpn\b|\bdhcp\b|\blan\b|\bwan\b|tcp/ip", re.I)
+
+
+def networking_line(jd_text, materials):
+    """The profile's home-networking practice as a skills row, for IT roles or JDs
+    that mention networking. Labelled 'Home Networking' so it is not read as
+    enterprise network administration."""
+    family = job_family(job_title(jd_text))
+    if family not in ("it", "security") and not NETWORKING_JD.search(jd_text or ""):
+        return []
+    for m in materials:
+        if m["kind"] != "profile":
+            continue
+        line = next((l.strip() for l in m["text"].splitlines() if "Asuswrt-Merlin" in l and "刷入" in l), None)
+        if line:
+            return [{"kind": "text", "text": NETWORKING, "basis": [
+                {"material_id": m["material_id"], "quote": line, "kind": m["kind"], "source": m["source"],
+                 "section": m["section"], "line_start": m["line_start"], "line_end": m["line_end"]}]}]
+    return []
+
+
+MAX_WORK_BULLETS = 3
+
+
+def work_projects(materials):
+    """Names of experience files marked 经历类型：工作经历 (jobs, not projects)."""
+    return {m["project"] for m in materials if m.get("kind") == "experience" and WORK_TYPE.search(m.get("text", ""))}
+
+
+def place_work_experience(data, suggestions, materials, refs, notes=None):
+    """Put employment in its own Work Experience section after the projects, in
+    place, whether the assembly filed it under Projects or left it out: a job held
+    is part of every resume. Lines keep their references and citations."""
+    work = work_projects(materials)
+    if not work:
+        return data
+    heading_refs, bullet_refs, counter = {}, {}, 0
+    for index, project in enumerate(suggestions.get("projects", []), 1):
+        ids = []
+        for _ in project.get("bullets", []):
+            counter += 1
+            ids.append(f"B{counter:02d}")
+        if project["project"] in work and f"H{index:02d}" in refs:
+            heading_refs[f"H{index:02d}"] = ids
+            bullet_refs.update({b: f"H{index:02d}" for b in ids})
+    if not heading_refs:
+        return data
+    moved = {h: [] for h in heading_refs}
+    found = set()
+    for section in data.get("sections", []):
+        kept = []
+        for line in section.get("lines", []):
+            ref = line.get("_from_ref")
+            if ref in heading_refs:
+                found.add(ref)
+                moved[ref].insert(0, line)
+            elif ref in bullet_refs:
+                moved[bullet_refs[ref]].append(line)
+            else:
+                kept.append(line)
+        section["lines"] = kept
+    lines = []
+    for heading, ids in heading_refs.items():
+        block = moved[heading]
+        if heading not in found:   # left out by the assembly: heading and its first bullets
+            block = [{"kind": "heading", "text": refs[heading]["text"], "basis": [dict(b) for b in refs[heading]["basis"]],
+                      "_from_ref": heading}]
+            block += [{"kind": "bullet", "text": refs[b]["text"], "basis": [dict(x) for x in refs[b]["basis"]],
+                       "_from_ref": b} for b in ids[:MAX_WORK_BULLETS] if b in refs]
+            if notes is not None:
+                notes.append(f"Work experience added: {refs[heading]['text']}")
+        elif block and block[0].get("_from_ref") != heading:
+            block = [line for line in block if line.get("_from_ref") == heading] + \
+                    [line for line in block if line.get("_from_ref") != heading]
+        lines += block
+    sections = [s for s in data.get("sections", []) if s.get("lines")]
+    position = max((i for i, s in enumerate(sections) if re.search(r"PROJECT", s["title"], re.I)), default=None)
+    position = position + 1 if position is not None else next(
+        (i for i, s in enumerate(sections) if re.search(r"EDUCATION", s["title"], re.I)), len(sections))
+    sections.insert(position, {"title": "Work Experience", "lines": lines})
+    data["sections"] = sections
+    return data
+
+
+def base_skill_rows(resume_text):
+    """Raw lines of the base resume's TECHNICAL SKILLS table."""
+    rows, inside = [], False
+    for raw in resume_text.splitlines():
+        raw = raw.strip()
+        if re.match(r"^[▐▏▌]", raw):
+            inside = "SKILL" in raw.upper() and "LANGUAGE" not in raw.upper()
+            continue
+        if inside and raw:
+            rows.append(raw)
+    return rows
+
+
+def base_section_rows(resume_text, pattern):
+    """Raw lines under the base resume headings whose title matches pattern."""
+    rows, inside = [], False
+    for raw in resume_text.splitlines():
+        raw = raw.strip()
+        if re.match(r"^[▐▏▌]", raw):
+            inside = bool(re.search(pattern, raw, re.I))
+            continue
+        if inside and raw:
+            rows.append(raw)
+    return rows
+
+
+def drop_self_assessment(sections, resume_entry, notes=None):
+    """Generic self-description from the base resume ('Strong self-learner with
+    a proven ability…') is not evidence; it reached half of the resumes through
+    sections titled 'Additional'. Remove it wherever it was placed."""
+    filler = set(base_section_rows(resume_entry["text"], r"SELF[- ]ASSESSMENT|PERSONAL (?:STATEMENT|QUALITIES)"))
+    if not filler:
+        return sections
+    result, removed = [], 0
+    for section in sections:
+        lines = [l for l in section["lines"]
+                 if not (l.get("basis") and all(b.get("quote", "").strip() in filler for b in l["basis"]))]
+        removed += len(section["lines"]) - len(lines)
+        if lines:
+            result.append({**section, "lines": lines})
+    if removed and notes is not None:
+        notes.append(f"Removed {removed} generic self-assessment line(s) from the base resume")
+    return result
+
+
+def keep_base_skills(sections, resume_entry, notes=None):
+    """Supported skill rows are never silently lost: re-add base-table rows the
+    assembly left out (it does in about one run in twelve). Order is set later."""
+    target = next((s for s in sections if "SKILL" in s["title"].upper()
+                   and "LANGUAGE" not in s["title"].upper()), None)
+    if target is None:
+        return sections
+    cited = {b.get("quote", "").strip() for line in target["lines"] for b in line.get("basis", [])}
+    added = 0
+    for raw in base_skill_rows(resume_entry["text"]):
+        if raw not in cited:
+            target["lines"].append({"kind": "text", "text": raw, "basis": [
+                {"material_id": RESUME_ID, "quote": raw,
+                 **{k: resume_entry[k] for k in ("kind", "source", "section", "line_start", "line_end")}}]})
+            added += 1
+    if added and notes is not None:
+        notes.append(f"Skills: restored {added} base-resume skill row(s) the assembly omitted")
+    return sections
+
+
+def _clean_heading(text):
+    """'Name | type |  Group project' -> 'Name  |  Type  |  Group Project'."""
+    parts, seen = [], set()
+    for part in re.split(r"\s*\|\s*", text.strip()):
+        part = part.strip()
+        if part and part.casefold() not in seen:
+            seen.add(part.casefold())
+            parts.append(part[0].upper() + part[1:] if part[0].islower() else part)
+    return "  |  ".join(parts)
+
+
+def normalize_headings(sections):
+    for section in sections:
+        for line in section["lines"]:
+            if line.get("kind") == "heading":
+                line["text"] = _clean_heading(line["text"])
     return sections
 
 
@@ -304,26 +676,64 @@ def _project_limits(title):
     return MAX_KEY_PROJECTS, MAX_KEY_BULLETS
 
 
+LANGUAGE_ENTRY = re.compile(r"\b(?:native|IELTS|TOEFL|PTE|fluent|bilingual|mother tongue)\b", re.I)
+
+
+def _sub_label(text):
+    """A short grouping label copied from the base table ('Creative & Media Skills')."""
+    text = text.strip()
+    return ":" not in text and len(text.split()) <= 4 and not re.search(r"[.;,]", text)
+
+
 def trim_projects(sections):
-    """Enforce the page budget in project sections, keeping the model's order.
-    Returns (trimmed sections, notes describing what was dropped)."""
+    """Select a balanced one-to-two-page application view; retained facts and citations are unchanged.
+
+    The full evidence library and suggestions remain available. Project limits
+    span sections, so repeating a section cannot bypass the document budget.
+    """
     notes, result = [], []
+    used_projects = {"key": 0, "additional": 0}
     for section in sections:
-        limits = _project_limits(section["title"])
+        title = section["title"].strip().upper()
+        if re.search(r"SELF[- ]ASSESSMENT|PERSONAL (?:STATEMENT|QUALITIES)|REFERENCES|HOBBIES", title):
+            notes.append(f"篇幅裁剪：已略去 {section['title']}，事实证据保留在原材料")
+            continue
+        limits = _project_limits(title)
         if limits is None:
-            result.append(section)
+            lines = list(section["lines"])
+            if re.search(r"ADDITIONAL|OTHER", title):
+                # grouping labels copied from the base table ('Creative & Media Skills')
+                lines = [l for l in lines if l["kind"] == "heading" or not _sub_label(l["text"])]
+            if re.fullmatch(r"LANGUAGES?(?:\s+(?:SKILLS|PROFICIENCY))?", title):
+                body = [line for line in lines if line["kind"] != "heading" and not _sub_label(line["text"])]
+                language_lines = [line for line in body if LANGUAGE_ENTRY.search(line["text"])]
+                if language_lines:
+                    joined = {"kind": "text", "text": " | ".join(line["text"] for line in language_lines),
+                              "basis": [b for line in language_lines for b in line.get("basis", [])]}
+                    lines = [joined] + [line for line in body if line not in language_lines]
+                else:
+                    lines = body
+            cap = MAX_SKILL_LINES if "SKILL" in title else None
+            if cap is not None and len(lines) > cap:
+                notes.append(f"篇幅提示：{section['title']}：当前 {len(lines)} 行，建议整理为约 {cap} 行；已保留原有事实")
+            if lines:
+                result.append({**section, "lines": lines})
             continue
         max_projects, max_bullets = limits
+        is_project = "PROJECT" in title
+        category = "additional" if "ADDITIONAL" in title or "OTHER" in title else "key"
         kept, projects, bullets, dropping = [], 0, 0, False
         dropped_projects, dropped_bullets = [], 0
         for line in section["lines"]:
             if line["kind"] == "heading":
                 projects += 1
                 bullets = 0
-                dropping = projects > max_projects
+                dropping = projects > max_projects or (is_project and used_projects[category] >= max_projects)
                 if dropping:
                     dropped_projects.append(line["text"])
                     continue
+                if is_project:
+                    used_projects[category] += 1
             elif dropping:
                 continue
             elif line["kind"] == "bullet":
@@ -333,12 +743,13 @@ def trim_projects(sections):
                     continue
             kept.append(line)
         if dropped_projects:
-            notes.append(f"篇幅裁剪：{section['title']}：超过 {max_projects} 个项目，已略去 "
+            notes.append(f"篇幅裁剪：{section['title']}：项目上限 {max_projects}，已略去 "
                          + "；".join(dropped_projects))
         if dropped_bullets:
             notes.append(f"篇幅裁剪：{section['title']}：每个项目最多 {max_bullets} 条要点，"
                          f"已略去 {dropped_bullets} 条")
-        result.append({**section, "lines": kept})
+        if kept:
+            result.append({**section, "lines": kept})
     return result, notes
 
 
@@ -388,6 +799,7 @@ def main(argv=None):
     parser.add_argument("--suggestions", type=Path, default=None,
                         help="cv_suggestions*.json，默认取运行目录里最新的一份")
     parser.add_argument("--data", type=Path, default=PROJECT_ROOT / "experiences")
+    parser.add_argument("--skip-review", action="store_true", help="Skip the optional AI project-order review")
     args = parser.parse_args(argv)
     try:
         meta, matches, jd_text = load_run(args.run)
@@ -411,14 +823,22 @@ def main(argv=None):
                                   config.get("timeout_seconds"))
     if summary_note:
         print(f"[build-resume] {summary_note}", file=sys.stderr)
+    assembly_notes = []
     try:
         sections = build(llm, suggestions, materials, resume_entry, jd_text,
-                         config.get("timeout_seconds"))
+                         config.get("timeout_seconds"), notes=assembly_notes)
     except LLMError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
+    if args.skip_review:
+        review_notes = ["AI project ordering review skipped by user."]
+    else:
+        print("[build-resume] Reviewing project relevance...", file=sys.stderr)
+        sections, review_notes = review_projects(llm, sections, jd_text, config.get("timeout_seconds"))
+    assembly_notes.extend(review_notes)
     out_md = unique_output(args.run, "resume_tailored")
     sections, trim_notes = trim_projects(sections)
+    trim_notes = assembly_notes + trim_notes
     if summary_note:
         trim_notes = [summary_note, *trim_notes]
     out_md.write_text(render(sections, suggestions_path, args.resume, meta, trim_notes),
@@ -426,7 +846,7 @@ def main(argv=None):
     out_md.with_suffix(".json").write_text(json.dumps(
         {"prompt_version": BUILD_PROMPT_VERSION, "run_id": meta["run_id"],
          "suggestions": str(suggestions_path), "resume_path": str(args.resume),
-         "sections": sections}, ensure_ascii=False, indent=2), encoding="utf-8")
+         "sections": sections, "assembly_notes": assembly_notes}, ensure_ascii=False, indent=2), encoding="utf-8")
     total = sum(len(s["lines"]) for s in sections)
     print(f"已写入：{out_md}（{len(sections)} 节，{total} 行）")
     return 0

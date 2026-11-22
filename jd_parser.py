@@ -92,7 +92,7 @@ EXTRACTION_SCHEMA = {
                     "operator": {"type": "string", "enum": GROUP_OPERATORS},
                     "requirement_texts": {
                         "type": "array",
-                        "minItems": 2,
+                        "minItems": 0,
                         "items": {"type": "string", "minLength": 1},
                     },
                     "source_quote": {"type": "string", "minLength": 1},
@@ -545,6 +545,9 @@ def _resolve_groups(groups, requirements, jd_text, warnings):
         text_to_id.setdefault(requirement["text"], requirement["requirement_id"])
     resolved, seen, next_id = [], set(), 0
     for group in groups:
+        if len(set(group["requirement_texts"])) < 2:
+            warnings.append("忽略不足两条独立要求的 AND/OR 组；其单条要求保留并独立匹配")
+            continue
         refs, missing = [], []
         for requirement_text in group["requirement_texts"]:
             if requirement_text in text_to_id:
