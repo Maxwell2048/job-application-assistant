@@ -4,6 +4,46 @@ Notable changes to this project. The format follows [Keep a Changelog](https://k
 entries link to the commit or pull request that made the change. The project has no numbered releases yet,
 so changes are grouped by date.
 
+## 2026-11-22
+
+### Fixed
+
+- Detect a local model whose engine reports a different name for the same model on the same port. An endpoint in `local_model_endpoints` can now list several accepted IDs in `models`, tried in order after `model`. Before this, switching the launcher to an engine that serves only the canonical name (no alias) made the app report the model as offline although it was loaded.
+- The offline message now says what each port actually reports and which names the configuration accepts, instead of only listing the ports.
+- The public release now includes the modules the resume, quality-report and application-answer stages import (`job_family`, `resume_skills`, `resume_review`, `quality_report`, `application_answer`) and their synthetic tests. A new test fails whenever released code imports a root module that the release leaves out.
+
+## 2026-11-21
+
+### Added
+
+- A quality report for every run (`quality_report.py`, `quality.json`): flags internal checking language, unsupported admin or service-desk claims, tools named only in the JD and leftover repair wording. The run page shows a badge and a panel listing each finding.
+- Redo single generation steps (tailoring, closing, assembly, export) from the run page instead of regenerating the whole run (`POST /api/runs/{id}/redo`).
+- Application question answers drafted from the same evidence and kept within the form's word limit (`application_answer.py`, `POST /api/runs/{id}/answers`).
+- A per-run log of every model call (`llm_calls.jsonl`) for diagnosing slow or failed stages.
+- Health reports which loaded modules changed since the backend started (`restart_needed`), and the page asks for a restart.
+- A coverage gate: an automatically queued job whose conditions mostly lack evidence (default share 0.7) stops at the match report with status `low_coverage`.
+- Resume headlines follow the target job family, skills are ordered by what the JD asks for, and projects are reviewed and ordered by evidence before assembly (`job_family.py`, `resume_skills.py`, `resume_review.py`).
+- An optional model preflight that validates one synthetic extraction before a batch drains.
+
+### Changed
+
+- Tailoring prompt version 9: plain, HR-readable framing without adding tools, numbers, employers, roles or outcomes; a failing extra citation is dropped instead of forcing a rewrite; bullets are written for the six best-evidenced projects plus every job held.
+- Screening skips any job with mandatory years of experience by default (`max_required_years=0`), still only when the rule and the model agree.
+
+## 2026-10-21
+
+### Added
+
+- Classify a SEEK refusal instead of merely counting it: an anti-bot challenge (`cf-mitigated: challenge`, body "Just a moment", no `Retry-After`) is recorded apart from a plain rate limit that does carry one, and each round reports which happened together with its real status code. Measured here: an eight-second burst of search pages was refused for ~12-25 minutes afterwards.
+- A cool-down window beside the cache (`seek_block.json`). While it is open a round spends no request at all unless another transport can answer, so a scheduled round cannot re-enter the lockout blind.
+- A local backlog queue (`pending_details.txt`): listings that never produced a JD have no ledger row and could not be found by any database query, so they are now promised to a file that survives the round; collector option `--backlog-only` drains it without touching one search page (~1.2 MB each).
+- Browser fallback transport (collector option `--transport auto|http|chrome`). A refused scripted request is retried in place through a locally installed headless Chromium browser, and the rest of the round follows it — measured at 4.5-5.6 s per warm navigation against ~0.7 s scripted, but it passes checks the scripted client cannot while locked out.
+- Rolling hourly request budgets persisted next to the cache (default 12 search pages and 40 detail pages) plus deterministic jitter between requests, so several rounds inside one hour cannot collectively retrigger the refusal instead of only reacting to it.
+
+### Changed
+
+- Round notes name what actually stopped the round — challenge, rate limit or spent hourly budget — together with how long to wait, whether the browser took over, and how many unread jobs remain queued. The blanket "HTTP 429/403" wording is gone from both backend notes and the report page, which now separates jobs already held from jobs still unread.
+
 ## 2026-10-16
 
 ### Added
