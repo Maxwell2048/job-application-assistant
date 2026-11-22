@@ -2,9 +2,11 @@ import json
 import contextlib
 import io
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -449,3 +451,245 @@ class ItOnlySearchTests(unittest.TestCase):
             _, _, jobs, report=RunTests().execute(Path(tmp),get,keywords=None,expanded_search=True)
         self.assertEqual(jobs,[])
         self.assertEqual(report['card_filtered'],1)
+
+
+class RefusalClassificationTests(unittest.TestCase):
+    """The edge refuses for two different reasons; only one of them is a counting problem."""
+
+    def test_challenge_is_not_a_rate_limit(self):
+        from collect_seek import Headers, classify_refusal
+        challenged = classify_refusal(429, Headers({'cf-mitigated': 'challenge', 'Server-Timing': 'chlray;desc="x"'}), '<title>Just a moment...</title>')
+        self.assertEqual((challenged['kind'], challenged['retry_after']), ('challenge', None))
+        plain = classify_refusal(429, Headers({'Retry-After': '30'}), '<html>slow down</html>')
+        self.assertEqual((plain['kind'], plain['retry_after']), ('throttle', 30))
+        self.assertEqual(classify_refusal(403, {}, '')['kind'], 'challenge')       # a bare refusal reads as a block
+
+    def test_headers_are_case_insensitive_and_state_round_trips(self):
+        from collect_seek import Headers, cooldown_open, load_json, save_json
+        headers = Headers({'CF-Mitigated': 'challenge'})
+        self.assertEqual(headers.get('cf-mitigated'), 'challenge')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'block.json'
+            self.assertEqual(load_json(path), {})                                   # absent is not an error
+            future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+            past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+            save_json(path, dict(until=future))
+            self.assertTrue(cooldown_open(load_json(path)))
+            save_json(path, dict(until=past))
+            self.assertFalse(cooldown_open(load_json(path)))
+            path.write_text('{ broken', encoding='utf-8')
+            self.assertFalse(cooldown_open(load_json(path)))                         # corrupt never blocks a round
+class PaceAndQuotaTests(unittest.TestCase):
+    """Requests are paced and budgeted so the edge has less reason to object in the first place."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def make_fetcher(self, delay=8.0, jitter_factor=2.0, list_per_hour=2, detail_per_hour=3):
+        from collect_seek import Fetcher, QuotaLedger
+        return Fetcher(self.root / 'cache', delay, False, transport='http', jitter_factor=jitter_factor,
+                       quota=QuotaLedger(self.root / 'quota.json', list_per_hour, detail_per_hour))
+
+    def measure_pace(self, kind, jitter_factor=2.0):
+        base = 'https://au.seek.com/job/123' if kind == 'detail' else search_url('junior', 1)
+        fetch = self.make_fetcher(jitter_factor=jitter_factor)            # 8 s delay with jitter up to twice that, as measured today
+        waits = []
+        with patch('collect_seek.time.sleep', side_effect=lambda seconds: waits.append(seconds)):
+            for attempt in range(6):                                     # six different listings, one gap each
+                fetch.last = time.monotonic()                            # the gap starts from the previous request
+                fetch._pace(base + '#' + str(attempt), kind)
+        return waits
+
+    def test_gaps_are_jittered_within_bounds_and_never_metronomic(self):
+        waits = self.measure_pace('list')
+        self.assertTrue(all(8.0 <= w <= 16.0 for w in waits), waits)     # never below the configured delay
+        self.assertGreater(len({round(w, 4) for w in waits}), 1, waits)  # equal gaps read as a script
+
+    def test_detail_pages_pace_lighter_than_search_pages(self):
+        details = self.measure_pace('detail', jitter_factor=1.0)         # ~230 KB each: paced lighter on purpose
+        listings = self.measure_pace('list', jitter_factor=1.0)          # ~1.2 MB each, and what triggers refusals
+        self.assertEqual((round(max(details), 1), round(max(listings), 1)), (5.6, 8.0))     # a fixed ratio, not an accident of hashing
+
+    def test_hourly_budget_stops_before_the_edge_objects(self):
+        from collect_seek import QuotaExhausted
+        fetch = self.make_fetcher(list_per_hour=1, detail_per_hour=1)
+        html = search_page(search_url('junior', 1))
+        with patch.object(type(fetch), '_fetch_http', return_value=html), patch('collect_seek.time.sleep'):
+            self.assertTrue(fetch.get(search_url('junior', 1)))          # the first one goes out
+            with self.assertRaises(QuotaExhausted) as refused:
+                fetch.get(search_url('junior', 2))                       # the next waits for the hour to roll over
+            self.assertEqual(refused.exception.kind, 'list')
+            self.assertTrue(fetch.get('https://au.seek.com/job/4'))      # details carry their own budget
+        self.assertEqual((fetch.http_attempts, fetch.requests), (2, 2))  # only requests that left are counted
+
+    def test_budget_survives_a_restart_inside_the_same_hour(self):
+        from collect_seek import QuotaLedger
+        path = self.root / 'quota.json'
+        ledger = QuotaLedger(path, 5, 5)
+        ledger.spend('list')
+        ledger.spend('list')
+        again = QuotaLedger(path, 5, 5)                                  # several rounds add up within one hour
+        self.assertEqual(again.remaining('list'), 3)
+
+
+class BrowserTransportTests(unittest.TestCase):
+    """A refused scripted request is handed to a real browser in place, so no job is lost mid-round."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def make_fetcher(self, transport='auto'):
+        from collect_seek import Fetcher
+        return Fetcher(self.root / 'cache', 1.0, False, transport=transport, browser=r'C:\fake\chrome.exe')
+
+    @staticmethod
+    def challenge(url):
+        from collect_seek import Headers
+        exc = urllib.error.HTTPError(url, 429, 'Too Many Requests', Headers({'cf-mitigated': 'challenge'}), None)
+        exc.seek_body = '<title>Just a moment...</title>'                # what the edge actually answers here
+        raise exc                                                        # a side_effect must raise, not return one
+
+    def test_refusal_switches_the_rest_of_the_round_to_the_browser(self):
+        fetch = self.make_fetcher()
+        html = search_page(search_url('junior', 1))
+        with contextlib.redirect_stdout(io.StringIO()), patch('collect_seek.find_browser', return_value=r'C:\fake\chrome.exe'), patch.object(type(fetch), '_fetch_http', side_effect=self.challenge), patch.object(type(fetch), '_fetch_browser', return_value=html), patch('collect_seek.time.sleep'):
+            self.assertEqual(fetch.get(search_url('junior', 1)), html)   # same job carried over, nothing lost
+        self.assertTrue(fetch.switched)
+        self.assertEqual((fetch.transport, fetch.block['kind']), ('chrome', 'challenge'))
+        self.assertEqual((fetch.http_attempts, fetch.browser_attempts), (1, 1))
+
+    def test_without_a_local_browser_the_refusal_still_ends_the_round(self):
+        fetch = self.make_fetcher()
+        with patch('collect_seek.find_browser', return_value=None), patch.object(type(fetch), '_fetch_http', side_effect=self.challenge), patch('collect_seek.time.sleep'):
+            with self.assertRaises(urllib.error.HTTPError):              # no fallback here: report it plainly
+                fetch.get(search_url('junior', 1))
+        self.assertFalse(fetch.switched)
+        self.assertEqual(fetch.transport, 'http')
+
+    def test_an_unparsable_page_is_not_treated_as_a_refusal(self):
+        fetch = self.make_fetcher(transport='chrome')                    # a changed layout is not an access problem
+        with patch('collect_seek.find_browser', return_value=r'C:\fake\chrome.exe'), patch.object(type(fetch), '_fetch_browser', side_effect=ValueError('页面结构已变化')):
+            with self.assertRaises(ValueError):
+                fetch._fetch('https://au.seek.com/job/9')
+        self.assertIsNone(fetch.block)                                   # so no cool-down window gets written
+
+    def test_a_document_without_site_data_never_enters_the_cache(self):
+        fetch = self.make_fetcher(transport='chrome')                    # a poisoned cache would stop later rounds too
+        junk = '<html><body>the page changed shape</body></html>'
+        with patch('collect_seek.find_browser', return_value=r'C:\fake\chrome.exe'), patch.object(type(fetch), '_fetch_browser', return_value=junk), patch('collect_seek.time.sleep'):
+            with self.assertRaises(ValueError):
+                fetch.get(search_url('junior', 7))
+        self.assertEqual(list((self.root / 'cache').glob('*.html')), [])
+
+
+class BacklogQueueTests(unittest.TestCase):
+    """Ids still owed a JD live in a file, because a listing without a JD never becomes a ledger row."""
+
+    execute = RunTests.execute
+    success = staticmethod(RunTests.success)
+
+    @staticmethod
+    def listings(url, ids):
+        data = json.loads(search_page(url, ids=ids)[len('<script>window.SEEK_REDUX_DATA = '):-len(';</script>')])
+        data['search']['query']['classification'] = '6281'               # the patched lane is an ict-scoped remote one
+        data['search']['query']['where'] = 'All Australia' if 'in-All-Australia' in url else 'Perth WA 6000'
+        data['results']['totalCount'] = len(ids)                         # this page holds everything: nothing to resume
+        return page(data)
+
+    def test_unread_ids_survive_the_round_and_drain_without_search_requests(self):
+        from collect_seek import load_queue
+        first_seen = []
+
+        def first_round(url):
+            first_seen.append(url)
+            return RunTests.success(url) if '/job/' in url else self.listings(url, ['201', '202', '203', '204'])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch('collect_seek.search_plan', return_value=[('data analyst', 'remote_ict')]):
+                _, _, jobs, report = self.execute(root, first_round, mode='broad', keywords=None, expanded_search=True, max_pages=1, limit=2)
+            owed = load_queue(root / 'pending_details.txt')   # read it here: the temp dir is gone once this block ends
+            self.assertEqual(report['unique_jobs'], 4)                   # all four were discovered
+            self.assertEqual(report['full_descriptions'], 2)             # two got a JD within the cap
+            self.assertEqual(report['detail_deferred'], 2)               # two are still owed
+            self.assertEqual(sorted(owed), sorted(j['job_id'] for j in jobs if not j['description']))
+
+            second_seen = []
+
+            def second_round(url):                                       # an ordinary round resumes from the queue file alone
+                second_seen.append(url)
+                return RunTests.success(url) if '/job/' in url else self.listings(url, ['301'])
+
+            with patch('collect_seek.search_plan', return_value=[('data analyst', 'remote_ict')]):
+                _, _, more_jobs, second_report = self.execute(root, second_round, mode='broad', keywords=None, expanded_search=True, max_pages=1, limit=2)
+                queue_after_drain = load_queue(root / 'pending_details.txt')   # a satisfied promise must leave the file for good
+        drained = {j['job_id'] for j in more_jobs}
+        self.assertTrue(drained <= {'201', '202', '203', '204'}, drained)   # it read what was owed, not fresh cards
+        self.assertEqual(second_report['search_pages'], [])              # lanes stay where they were left
+        self.assertEqual(second_report['pending_read'], 2)               # ids survive without ever reaching the ledger
+        self.assertEqual(queue_after_drain, [])                          # (and a name clash with the id set above made an earlier run lie)
+
+    def test_a_partial_drain_shortens_the_queue_instead_of_repeating_itself(self):
+        from collect_seek import load_queue
+
+        def get(url):
+            return RunTests.success(url) if '/job/' in url else self.listings(url, ['401'])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'pending_details.txt').write_text('901\n902\n903\n', encoding='utf-8')   # three promises owed
+            with patch('collect_seek.search_plan', return_value=[('data analyst', 'remote_ict')]):
+                _, _, _, report = self.execute(root, get, mode='broad', keywords=None, expanded_search=True, max_pages=1, limit=1)
+            left = load_queue(root / 'pending_details.txt')                                      # one read this round
+        self.assertEqual(report['pending_read'], 1)                                              # only its own share was spent
+        self.assertEqual(left, ['902', '903'])                                                   # the job it read must not be re-promised
+
+    def test_a_still_open_cool_down_spends_no_requests_at_all(self):
+        requested = []
+
+        def get(url):
+            requested.append(url)
+            return RunTests.success(url)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            until = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+            (root / 'seek_block.json').write_text(json.dumps(dict(kind='challenge', code=429, until=until)), encoding='utf-8')
+            (root / 'pending_details.txt').write_text('777\n', encoding='utf-8')
+            with patch('collect_seek.find_browser', return_value=None):  # no fallback transport here: stay home
+                _, _, jobs, report = self.execute(root, get, block_file=root / 'seek_block.json')
+                kept = (root / 'pending_details.txt').read_text(encoding='utf-8').strip()   # the temp dir is gone after this block
+        self.assertEqual(requested, [])                                  # the window is open, so not one request
+        self.assertTrue(report['deferred_for_cool_down'] and report['rate_limited'])
+        self.assertIsNone(report['queue_written'])                       # the backlog stays exactly as promised
+        self.assertEqual(kept, '777')
+        self.assertIn('退避', ' '.join(report['errors']))
+
+    def test_a_round_that_got_through_clears_the_cool_down_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stale = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            (root / 'seek_block.json').write_text(json.dumps(dict(kind='throttle', code=429, until=stale)), encoding='utf-8')
+            self.execute(root, RunTests.success)                         # a round that went through
+            state = json.loads((root / 'seek_block.json').read_text(encoding='utf-8'))
+        self.assertEqual(state, {})                                      # stops claiming a window that has passed
+
+
+class QueueFileTests(unittest.TestCase):
+    def test_dedupe_order_and_bound(self):
+        from collect_seek import QUEUE_LIMIT, load_queue, save_queue
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'pending_details.txt'
+            self.assertEqual(load_queue(path), [])                       # nothing promised yet is not an error
+            save_queue(path, ['7', '7', '9', 'not-a-number'])
+            self.assertEqual(load_queue(path), ['7', '9'])               # order kept, junk dropped
+            save_queue(path, [str(i) for i in range(QUEUE_LIMIT + 50)])
+            self.assertEqual(len(load_queue(path)), QUEUE_LIMIT)         # an abandoned lane cannot grow it forever
