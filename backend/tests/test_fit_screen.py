@@ -131,6 +131,32 @@ class FitGateTests(unittest.TestCase):
         mixed = jd + "Graduates are welcome to apply.\n"
         self.assertEqual(self.gate(mixed, "Full Stack Developer", answer)["decision"], "run")
 
+    def test_any_hard_years_requirement_is_a_skip_by_default(self):
+        """2026-11-13: the candidate asked to drop every JD that hard-requires years of work experience."""
+        self.assertEqual(Settings().max_required_years, 0)
+        jd = "Cloud Administrator\n\n2+ years of hands-on experience maintaining IT infrastructure.\n"
+        answer = fit_answer(role_family="infrastructure", min_years=2, years_mandatory=True,
+                            years_quote="2+ years of hands-on experience maintaining IT infrastructure")
+        result = self.gate(jd, "Cloud Administrator", answer, max_required_years=0)
+        self.assertEqual(result["decision"], "skip")
+        self.assertIn("2+ years of hands-on experience", result["skips"][0])
+
+    def test_rule_reads_spelled_numbers_plus_and_degree_alternatives(self):
+        rule = screen.mandatory_years_by_rule
+        self.assertEqual(rule("A minimum of five years’ experience in a similar role.", 0)[0], 5)
+        self.assertEqual(rule("Minimum seven (7) years' experience within cyber security.", 0)[0], 7)
+        self.assertEqual(rule("Coupled with 5+ years' experience in business analytics.", 0)[0], 5)
+        self.assertEqual(rule("The applicant will have a minimum of 1+ years proven experience in a similar role.", 0)[0], 1)
+        # a degree offered as an alternative, or a range starting at zero, is not a hard requirement
+        self.assertEqual(rule("Qualification in a computing discipline and/or a minimum of 2 years relevant "
+                              "experience in an IT support function.", 0)[0], 0)
+        self.assertEqual(rule("At least 2 years experience or a relevant degree.", 0)[0], 0)
+        self.assertEqual(rule("0-2 years of experience required.", 0)[0], 0)
+        self.assertEqual(rule("You will ideally have at least 2 + years of experience.", 0)[0], 0)
+        self.assertEqual(rule("One of our five years of experience working with clients.", 0)[0], 0)
+        self.assertEqual(rule("You'll ideally have:\n5+ years' cybersecurity experience, including SOC work\n", 0)[0], 0)
+        self.assertEqual(rule("Essential\n5+ years' cybersecurity experience\n", 0)[0], 5)
+
     def test_years_without_a_number_in_the_quote(self):
         jd = "Database Administrator\n\nSubstantial experience in planning database changes is essential.\n"
         result = self.gate(jd, "Database Administrator", fit_answer(
