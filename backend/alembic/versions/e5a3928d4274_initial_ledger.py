@@ -1,7 +1,7 @@
 """initial ledger
 
 Revision ID: e5a3928d4274
-Revises:
+Revises: 
 Create Date: 2026-09-19 22:56:14.421897
 """
 from alembic import op
