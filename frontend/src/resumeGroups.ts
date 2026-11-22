@@ -22,3 +22,24 @@ export function groupResumes(runs: RunSummary[], filter: ApplicationFilter = 'al
 export function excludeArchivedResumes(runs: RunSummary[], archivedJobIds: ReadonlySet<number>) {
   return runs.filter((run) => run.archived !== true && (run.job_id == null || !archivedJobIds.has(run.job_id)))
 }
+
+
+/** Submitted jobs no longer leave unused versions in the active pending list.
+ * Actual version submission records are never inferred or overwritten.
+ */
+export function partitionApplicationResumes(runs: RunSummary[]) {
+  const submittedJobs = new Set(runs.filter((r) => r.job_id != null &&
+    (r.application_status === 'submitted' || r.job_application_status === 'submitted'))
+    .map((r) => r.job_id!))
+  const active: RunSummary[] = []
+  const history: RunSummary[] = []
+  for (const run of runs) {
+    if (!run.has_resume) continue
+    if (run.application_status !== 'submitted' && run.job_id != null && submittedJobs.has(run.job_id)) {
+      history.push(run)
+    } else {
+      active.push(run)
+    }
+  }
+  return { active, history }
+}

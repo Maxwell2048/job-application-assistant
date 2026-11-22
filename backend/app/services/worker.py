@@ -29,7 +29,7 @@ MAX_ATTEMPTS = 2
 MODEL_POLL_SECONDS = 15
 
 TASK_TO_JOB_STATUS = {"queued": "queued", "running": "processing", "done": "done", "failed": "failed", "blocked": "blocked",
-                      "cancelled": "cancelled"}
+                      "cancelled": "cancelled", "low_coverage": "low_coverage"}
 
 
 class EventBus:
@@ -70,6 +70,8 @@ class Worker:
         self.tasks = {}                    # id -> live Task (recent, in memory)
         self.current = None
         self.paused = ""                   # why the queue is waiting, e.g. the model is offline
+        self._validated_model = None
+        self._validation_due = 0.0
         self._queue = queue.PriorityQueue()
         self._order = itertools.count()    # first in, first out among equal priorities
         self._lock = threading.Lock()
@@ -123,11 +125,26 @@ class Worker:
         while not self._stop.is_set():
             online, info = self.model_online()
             if online:
+                if self.settings.model_preflight_enabled and self._validated_model != info:
+                    if time.monotonic() < self._validation_due:
+                        self._stop.wait(MODEL_POLL_SECONDS)
+                        continue
+                    self.paused = "模型已在线，正在验证 JD 提取格式；任务暂不开始"
+                    self.events.publish("queue", self.queue_status())
+                    valid, detail = self.pipeline.model_preflight()
+                    if not valid:
+                        self.paused = detail + "；队列保留，60 秒后重检"
+                        self._validation_due = time.monotonic() + 60
+                        self.events.publish("queue", self.queue_status())
+                        self._stop.wait(MODEL_POLL_SECONDS)
+                        continue
+                    self._validated_model = info
                 if self.paused:
                     self.paused = ""
                     self.events.publish("queue", self.queue_status())
                 return True
-            launcher = self.settings.model_launcher
+            self._validated_model = None
+            launcher = self.settings.model_launcher if self.settings.model_auto_start else None
             if launcher and (launched_at is None
                              or time.time() - launched_at > self.settings.model_start_timeout_seconds):
                 self.launch(launcher)
@@ -143,11 +160,18 @@ class Worker:
         """One more attempt for a full generation that failed on its own (not
         cancelled, not blocked by location): most failures are a model answer
         that did not validate, which a fresh run usually gets past."""
+        if (self.settings.model_preflight_enabled and task.status == "failed"
+                and any(marker in (task.error or "") for marker in
+                        ("解析出 JSON", "输出结构", "未通过校验", "缺少必需字段"))):
+            self._validated_model = None
+            self._validation_due = time.monotonic() + 60
+            self.paused = "模型输出校验失败，停止整任务自动重试；其余队列保留，60 秒后重检"
+            return
         if not self.settings.retry_failed_generation or task.kind != "full" or task.status != "failed" \
                 or task.cancel_requested or task.attempt >= MAX_ATTEMPTS or task.jd_path is None:
             return
         self.submit_full(jd_name=task.jd_name, with_interview=task.with_interview, job_id=task.job_id,
-                         jd_path=task.jd_path, priority=task.priority, attempt=task.attempt + 1)
+                         jd_path=task.jd_path, priority=task.priority, attempt=task.attempt + 1, force=task.force)
 
     def recover(self):
         """After a restart: close the task rows that were queued or running
@@ -174,11 +198,18 @@ class Worker:
             self.submit_full(jd_name=name, job_id=job_id, jd_path=path, priority=priority)
         return len(again)
 
-    def generate_ready(self):
+    def generate_ready(self, level="default"):
         """Queue every job the screening left "ready", best fit first. -> the number queued."""
         picked = []
         with self.session_factory() as session:
             for job in session.scalars(select(Job).where(Job.status == "ready").order_by(Job.first_seen)).all():
+                latest = session.scalar(select(Screening).where(Screening.job_id == job.id)
+                                        .order_by(Screening.created_at.desc(), Screening.id.desc()))
+                fit = (latest.rule_result or {}).get("fit") or {} if latest else {}
+                job_level = fit.get("level", "unclear")
+                excluded = job_level in ("mid", "senior") if level == "default" else job_level != level
+                if excluded:
+                    continue
                 if job.jd_path and Path(job.jd_path).is_file():
                     job.status = "queued"
                     picked.append((self._priority_of(session, job), job.id, job.company or job.title, Path(job.jd_path)))
@@ -197,10 +228,26 @@ class Worker:
 
     # -- submission -------------------------------------------------------------
     def submit_full(self, jd_text=None, jd_name="", with_interview=False, job_id=None, jd_path=None,
-                    priority=PRIORITY_MANUAL, attempt=1):
-        task = Task("full", jd_name=jd_name, with_interview=with_interview, job_id=job_id, jd_path=jd_path)
+                    priority=PRIORITY_MANUAL, attempt=1, force=False):
+        """force: generate even when the evidence covers few of the job's conditions
+        (a decision from the page); automatic queues leave it False."""
+        task = Task("full", jd_name=jd_name, with_interview=with_interview, job_id=job_id, jd_path=jd_path,
+                    force=force)
         task.attempt = attempt
         self._enqueue(task, lambda t: self.pipeline.run_full(t, jd_text), priority)
+        return task
+
+    def submit_redo(self, run_dir, step, job_id=None, jd_name=""):
+        """Repeat the later stages of an existing run: tailor (continue a run the
+        coverage gate stopped), closing (summary and cover letter), assemble, export."""
+        task = Task("redo", jd_name=jd_name, run_dir=run_dir, job_id=job_id, redo=step)
+        self._enqueue(task, self.pipeline.run_redo, PRIORITY_MANUAL)
+        return task
+
+    def submit_answer(self, run_dir, question, max_words, job_id=None, jd_name=""):
+        task = Task("answer", jd_name=jd_name, run_dir=run_dir, job_id=job_id)
+        task.request = {"id": task.id, "question": question, "max_words": max_words}
+        self._enqueue(task, self.pipeline.run_answer, PRIORITY_MANUAL)
         return task
 
     def submit_interview(self, run_dir, job_id=None):
@@ -246,16 +293,18 @@ class Worker:
             row.error = task.error or ""
             if task.status == "running" and row.started_at is None:
                 row.started_at = now
-            if task.status in ("done", "failed", "blocked", "cancelled"):
+            if task.status in ("done", "failed", "blocked", "cancelled", "low_coverage"):
                 row.finished_at = now
             if task.job_id is not None:
                 job = session.get(Job, task.job_id)
                 if job is not None:
                     if task.kind == "full" and task.status in TASK_TO_JOB_STATUS:
                         job.status = TASK_TO_JOB_STATUS[task.status]
+                    elif task.kind == "redo" and task.redo == "tailor" and task.status in ("queued", "running", "done"):
+                        job.status = TASK_TO_JOB_STATUS[task.status]   # continuing a stopped run makes it a generation
                     if task.jd_path and not job.jd_path:
                         job.jd_path = str(task.jd_path)
-            if task.run_dir and task.run_dir.is_dir() and task.status in ("done", "failed", "blocked"):
+            if task.run_dir and task.run_dir.is_dir() and task.status in ("done", "failed", "blocked", "low_coverage"):
                 summary = run_summary(task.run_dir)
                 run = session.scalar(select(RagRun).where(RagRun.run_id == task.run_dir.name))
                 if run is None:
