@@ -70,11 +70,11 @@ class SearchOnlyTests(WorkerCase):
     def test_jd_files_are_relinked_after_the_project_moved(self):
         moved = self.add_job("moved")
         with self.sessions() as session:
-            session.get(Job, moved).jd_path = r"Z:\example\old-project\jobs\moved.txt"   # the old drive
+            session.get(Job, moved).jd_path = r"D:\old-location\project\jobs\moved.txt"   # the old drive
             session.commit()
         lost = self.add_job("lost", jd=False)
         with self.sessions() as session:
-            session.get(Job, lost).jd_path = r"Z:\example\old-project\jobs\gone.txt"
+            session.get(Job, lost).jd_path = r"D:\old-location\project\jobs\gone.txt"
             session.commit()
         self.assertEqual(relink_jd_files(self.sessions, self.root / "jobs"), 1)
         with self.sessions() as session:

@@ -8,22 +8,30 @@ is fetched, and jobs listed in --known-ids are reported without re-reading
 their details.
 
 Expanded searches rotate lanes and persist their next page. A search page is
-read before the JD backlog, so discovery is not starved. Stop on 403/429.
-Legacy custom keyword searches retain details-first behavior.
+read before the JD backlog, so discovery is not starved. Legacy custom keyword
+searches retain details-first behavior.
 
-Requests present a browser transport-layer (TLS) fingerprint via curl_cffi
-(--impersonate) so anti-bot systems do not flag the collector as a script."""
+A refused request is classified, not just counted: an anti-bot challenge (the edge answers with a "Just a moment" body and cf-mitigated: challenge, no Retry-After) differs from a plain rate limit that does carry Retry-After. Either one ends the round, but both write a cool-down file and keep every unread job id in <state-dir>/pending_details.txt, so the next round drains them through --pending-ids without needing the ledger to hold those rows at all (--backlog-only runs such a drain with zero search requests). While the cool-down is still open the next round makes no request of its own unless it can use another transport.
+
+Two transports are available. The default one presents a browser transport-layer
+(TLS) fingerprint via curl_cffi (--impersonate). When that transport gets
+refused, --transport auto falls back to a real local Chromium browser run headless
+(--browser-path), which passes checks the scripted client cannot; measured on this
+machine: 4.5-5.6 s per warm navigation versus ~12-25 min of lockout for the script.
+Velocity is also capped before the edge objects: jittered gaps between requests and
+a rolling hourly budget for search pages and detail pages persisted in the state dir."""
 import argparse
 import csv
 import hashlib
 import json
 import re
+import subprocess
 import time
 import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -39,6 +47,27 @@ from search_rules import excluded_title, ambiguous_level, clearly_non_it_title, 
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_IMPERSONATE = 'chrome131'   # browser TLS fingerprint to present; override with --impersonate
+
+# --- anti-bot handling -------------------------------------------------------
+# Measured on this machine: an eight-request burst of search pages spaced exactly at the
+# delay was refused for ~12-25 minutes afterwards, and the refusal carried no Retry-After,
+# so waiting blindly is guesswork. These files make the wait explicit instead.
+BLOCK_FILE = 'seek_block.json'        # cool-down state written when a request is refused
+QUOTA_FILE = 'seek_quota.json'        # rolling hourly record of what this client asked for
+QUEUE_FILE = 'pending_details.txt'    # job ids whose full JD is still owed, one per line
+CHALLENGE_COOLDOWN_MINUTES = 25       # anti-bot challenge: long enough to outlast the lockout window
+THROTTLE_COOLDOWN_MINUTES = 10        # plain rate limit, or shorter when Retry-After asks for longer
+MAX_LIST_PER_HOUR = 12                # search pages cost ~1.2 MB each and drive the refusals
+MAX_DETAILS_PER_HOUR = 40             # detail pages are ~230 KB and are what actually earns a JD
+JITTER_FACTOR = 1.8                   # a request waits uniform(delay, delay*factor); equal gaps get flagged
+
+BROWSER_CANDIDATES = (                # real Chromium-family browsers that pass scripted clients' checks
+    r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+    r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium')
+BROWSER_TIMEOUT_SECONDS = 90          # one navigation, including any challenge round trip
+BROWSER_VIRTUAL_TIME_MS = 20000       # how long the browser may spend settling a page before dump-dom returns
 
 ROLE_KEYWORDS = ['software developer', 'data analyst', 'business intelligence', 'application support', 'service desk', 'test analyst', 'AI engineer', 'data engineer', 'project coordinator', 'machine learning', 'python developer', 'web developer', 'IT support', 'business analyst']
 MODE_KEYWORDS = {'focused': ['graduate', 'junior', 'entry level', 'trainee', *ROLE_KEYWORDS], 'broad': ['']}
@@ -99,6 +128,170 @@ def state_from_html(html):
         raise ValueError('SEEK page state missing: access challenge or changed page layout')
     # Parse JSON only; never execute page JavaScript.
     return json.JSONDecoder().raw_decode(html[match.end():])[0]
+
+
+# --- refusal classification, cool-down, backlog queue and hourly quota --------
+
+class Headers:
+    """Case-insensitive header view so callers can test cf-mitigated without caring how the provider spelled it."""
+
+    def __init__(self, source=None):
+        self._items = {str(k).lower(): v for k, v in dict(source or {}).items()}
+
+    def get(self, name, default=None):
+        return self._items.get(str(name).lower(), default)
+
+    def items(self):
+        return self._items.items()
+
+
+CHALLENGE_MARKERS = ('just a moment', 'attention required', 'cf-chl', 'turnstile')
+
+
+def classify_refusal(code, headers=None, body=''):
+    """What refused us. An anti-bot challenge and a rate limit need different answers: one is a
+    fingerprint/session problem that waiting out helps little, the other is pure velocity."""
+    headers = headers if isinstance(headers, Headers) else Headers(headers or {})
+    retry_after = None
+    raw = str(headers.get('retry-after') or '').strip()
+    if raw.isdigit():
+        retry_after = min(max(int(raw), 1), 3600)
+    text = (body or '')[:2000].lower()
+    challenged = str(headers.get('cf-mitigated') or '').lower().startswith('challenge') \
+        or any(marker in text for marker in CHALLENGE_MARKERS) \
+        or bool(headers.get('server-timing')) and 'chlray' in str(headers.get('server-timing')).lower()
+    kind = 'challenge' if (challenged or code == 403) else 'throttle'
+    return dict(kind=kind, code=int(code), retry_after=retry_after)
+
+
+def block_info(exc):
+    """The refusal facts carried by an exception, or None when it is not a block at all."""
+    code = getattr(exc, 'code', None)
+    if not isinstance(code, int) or code not in (403, 429):
+        return None
+    return classify_refusal(code, getattr(exc, 'headers', None), getattr(exc, 'seek_body', ''))
+
+
+BLOCK_LABELS = {'challenge': '反爬校验拦截', 'throttle': '请求频率限制'}
+
+
+def load_json(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_json(path, data):
+    """Best effort: losing cool-down state must never lose the run's collected output."""
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(path.suffix + '.tmp')
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        temp.replace(path)
+        return True
+    except OSError:
+        return False
+
+
+def cooldown_open(state, now=None):
+    until = (state or {}).get('until')
+    if not until:
+        return False
+    try:
+        end = datetime.fromisoformat(until)
+    except ValueError:
+        return False
+    return (now or datetime.now(timezone.utc)) < end
+
+
+QUEUE_LIMIT = 500
+
+
+def load_queue(path):
+    """Job ids still owed a full JD, in the order they were promised."""
+    try:
+        lines = Path(path).read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return []
+    seen, ids = set(), []
+    for line in lines:
+        ident = line.strip()
+        if ident.isdigit() and ident not in seen:
+            seen.add(ident)
+            ids.append(ident)
+    return ids
+
+
+def save_queue(path, ids):
+    """Bound the backlog so an abandoned keyword lane cannot grow it without limit."""
+    unique, seen = [], set()
+    for ident in ids:
+        ident = str(ident).strip()
+        if ident.isdigit() and ident not in seen:
+            seen.add(ident)
+            unique.append(ident)
+        if len(unique) >= QUEUE_LIMIT:
+            break
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(path.suffix + '.tmp')
+        temp.write_text('\n'.join(unique) + ('\n' if unique else ''), encoding='utf-8')
+        temp.replace(path)
+        return True
+    except OSError:
+        return False
+
+
+class QuotaLedger:
+    """A rolling hourly budget kept on disk, because several rounds inside one hour add up to a refusal.
+
+    Only requests that actually left the machine are counted; cache hits cost nothing."""
+
+    def __init__(self, path, list_per_hour=MAX_LIST_PER_HOUR, details_per_hour=MAX_DETAILS_PER_HOUR):
+        self.path = Path(path)
+        self.limits = {'list': max(0, int(list_per_hour)), 'detail': max(0, int(details_per_hour))}
+        self.persisted = True
+        events = load_json(self.path).get('events') or []
+        cutoff = time.time() - 3600
+        self.events = [e for e in events if isinstance(e, dict) and float(e.get('at') or 0) > cutoff]
+
+    def used(self, kind):
+        return sum(1 for e in self.events if e.get('kind') == kind)
+
+    def remaining(self, kind):
+        limit = self.limits.get(kind)
+        return 0 if limit is None else max(0, limit - self.used(kind))
+
+    def allow(self, kind):
+        return bool(self.remaining(kind))
+
+    def spend(self, kind):
+        self.events.append(dict(kind=kind, at=time.time()))
+        self.persisted = save_json(self.path, dict(events=self.events[-200:], updated_at=datetime.now(timezone.utc).isoformat()))
+
+
+def find_browser(explicit=None):
+    """A real Chromium browser to fall back on when the scripted client is refused."""
+    import shutil
+    candidates = []
+    if explicit:
+        candidates.append(str(explicit))
+    for name in ('chrome', 'google-chrome', 'chromium', 'chromium-browser', 'microsoft-edge', 'msedge'):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    candidates.extend(BROWSER_CANDIDATES)
+    for candidate in candidates:
+        try:
+            if Path(candidate).is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
 class PlainText(HTMLParser):
@@ -203,15 +396,22 @@ def parse_detail(html, expected_id):
 
 
 def read_detail(fetch, job, errors):
-    """Fill one job from its detail page. -> 'ok', 'error' (go on with the next)
-    or 'stop' (403/429 or an unknown page: no further requests this run)."""
+    """Fill one job from its detail page. -> 'ok', 'error' (go on with the next),
+    'quota' (this hour's share is spent; the job stays owed) or 'stop' (the edge refused us,
+    or the page/transport failed: no further requests this run)."""
     try:
         info = detail_info(fetch.get(job['url']), job['job_id'])
+    except QuotaExhausted:
+        # Not a fault of this listing: leave it pending so the backlog queue still owes it.
+        return 'quota'
     except urllib.error.HTTPError as exc:
-        job['detail_status'] = '读取失败（访问拒绝或限流）' if exc.code in (403, 429) else '读取失败（HTTP错误）'
-        job['detail_error'] = f'HTTP {exc.code}'
+        refused = block_info(exc)
+        job['detail_status'] = '读取失败（访问拒绝或限流）' if refused else '读取失败（HTTP错误）'
+        job['detail_error'] = f'HTTP {exc.code}'          # keep the bare code machine-readable downstream
+        if refused:
+            job['block_code'], job['block_kind'] = refused['code'], refused['kind']
         errors.append(f"JD {job['job_id']}: HTTP {exc.code}")
-        return 'stop' if exc.code in (403, 429) else 'error'
+        return 'stop' if refused else 'error'
     except Exception as exc:
         job['detail_status'] = '读取失败（页面或连接错误）'
         job['detail_error'] = str(exc)
@@ -224,6 +424,13 @@ def read_detail(fetch, job, errors):
     job['detail_status'] = '已读取完整JD'
     print(f"JD {job['job_id']}: {len(job['description'])} characters", flush=True)
     return 'ok'
+
+
+def blocked_by(job):
+    """True when a stopped row was stopped by the edge, not by an unreadable page."""
+    if job.get('block_kind'):
+        return str(job.get('block_code') or '') in ('403', '429')
+    return str(job.get('detail_error') or '') in ('HTTP 403', 'HTTP 429')   # rows written before these fields existed
 
 
 def assess(job):
@@ -262,53 +469,183 @@ def assess(job):
     return job
 
 
+class QuotaExhausted(Exception):
+    """This hour's share of requests is spent; stop without asking the edge again."""
+
+    def __init__(self, kind):
+        super().__init__(f'hourly {kind} budget exhausted')
+        self.kind = kind
+
+
 class Fetcher:
-    def __init__(self, cache, delay, refresh, impersonate=DEFAULT_IMPERSONATE):
+    """Two transports, one refusal policy.
+
+    The scripted transport is cheap and fast (~0.7 s) but gets refused outright once the edge
+    decides this client looks automated -- measured lockouts of 12-25 minutes, no Retry-After to
+    wait on. A real local Chromium browser passes where the script cannot (~4.5-5.6 s per warm
+    navigation), so a refusal switches the rest of the round over instead of throwing the job away."""
+
+    def __init__(self, cache, delay, refresh, impersonate=DEFAULT_IMPERSONATE, *, transport='auto',
+                 browser=None, profile=None, quota=None, jitter_factor=JITTER_FACTOR):
         self.cache, self.delay, self.refresh = cache, delay, refresh
         cache.mkdir(parents=True, exist_ok=True)
         self.last = 0
         self.requests = 0
         self.impersonate = impersonate
         self._session = None
+        requested = (transport or 'auto').lower()
+        if requested not in ('auto', 'http', 'chrome'):
+            raise ValueError('transport must be auto, http or chrome')
+        self.policy = requested                                      # what the caller allowed, independent of the current channel
+        self.browser_path = browser if requested != 'http' else None  # an explicit http run never shells out
+        self.profile = Path(profile) if profile else Path(cache) / '.browser_profile'
+        self.quota = quota
+        self.jitter_factor = max(1.0, float(jitter_factor))
+        if requested == 'chrome':
+            if not find_browser(self.browser_path):
+                raise ValueError('本机没有可用的 Chromium 浏览器，无法使用浏览器传输通道')
+            self.transport = 'chrome'
+        else:
+            self.transport = 'http'
+        self.switched = False           # the scripted client was refused and the browser took over mid-round
+        self.block = None               # facts of the last refusal that stopped us: code, kind, retry_after
+        # Attempts per transport: a switched request is counted on whichever channel carried it.
+        self.http_attempts = self.browser_attempts = 0
+
+    def can_use_browser(self):
+        """Whether a refusal may be handed to a real browser instead of ending the round."""
+        return self.policy != 'http' and bool(find_browser(self.browser_path))
 
     def _open_session(self):
         if self._session is None and _curl_requests is not None:
             self._session = _curl_requests.Session(impersonate=self.impersonate)
         return self._session
 
-    def _fetch(self, url):
-        """GET url -> html text. Raises urllib.error.HTTPError on non-2xx so the
-        existing 403/429 stop logic is unchanged. Presents the browser TLS
-        fingerprint when curl_cffi is available; otherwise the standard library."""
+    def _fetch_http(self, url):
+        """GET url -> html text. Raises urllib.error.HTTPError on non-2xx so the existing block logic is unchanged.
+
+        Presents the browser transport-layer (TLS) fingerprint when curl_cffi is available; otherwise the standard library."""
         session = self._open_session()
         if session is not None:
             response = session.get(url, timeout=30)
             if not 200 <= response.status_code < 300:
-                raise urllib.error.HTTPError(url, response.status_code, response.reason or 'HTTP error', dict(response.headers), None)
+                exc = urllib.error.HTTPError(url, response.status_code, response.reason or 'HTTP error', Headers(response.headers), None)
+                exc.seek_body = response.text[:2000]   # the edge says what it is in prose; use it rather than guessing
+                raise exc
             return response.text
         request = urllib.request.Request(url, headers={'User-Agent': 'SeekJobCollector/0.1 (personal job search)', 'Accept': 'text/html'})
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.read().decode('utf-8')
 
+    def _fetch_browser(self, url):
+        """One navigation in a real headless Chromium browser (--dump-dom).
+
+        The result is the serialized document, not the bytes on the wire, so callers must validate it before caching; get() already does."""
+        executable = find_browser(self.browser_path)
+        if not executable:
+            raise RuntimeError('本机没有可用的 Chromium 浏览器（可用 --browser-path 指定）')
+        self.profile.mkdir(parents=True, exist_ok=True)
+        dest = Path(self.cache) / f'.navigating-{uuid.uuid4().hex}.html'
+        log = dest.with_suffix('.err.txt')
+        command = [executable, '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-crash-reporter', '--no-first-run',
+                   f'--virtual-time-budget={BROWSER_VIRTUAL_TIME_MS}', f'--user-data-dir={self.profile}', '--dump-dom', url]
+        try:
+            with dest.open('wb') as out, log.open('wb') as err:
+                subprocess.run(command, stdout=out, stderr=err, timeout=BROWSER_TIMEOUT_SECONDS)
+            html = dest.read_text(encoding='utf-8', errors='replace') if dest.exists() else ''
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f'浏览器导航超时（{BROWSER_TIMEOUT_SECONDS} 秒）：{exc}') from exc
+        finally:
+            for leftover in (dest, log):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+        if 'SEEK_REDUX_DATA' not in html:
+            head = html[:2000].lower()
+            refused = any(marker in head for marker in CHALLENGE_MARKERS)
+            if refused or not html.strip():
+                exc = urllib.error.HTTPError(url, 429, 'Anti-bot challenge', Headers({'cf-mitigated': 'challenge'}), None)
+                exc.seek_body = html[:2000]
+                raise exc
+            raise ValueError('页面结构已变化，未找到站点数据')   # a real page we can no longer parse is not a block to retry
+        return html
+
+    def _fetch(self, url):
+        """-> html text. A scripted refusal switches this and every later request over to the browser."""
+        if self.transport == 'chrome':
+            self.browser_attempts += 1
+            return self._fetch_browser(url)
+        self.http_attempts += 1
+        try:
+            return self._fetch_http(url)
+        except urllib.error.HTTPError as exc:
+            info = block_info(exc)
+            if info is None or not self.can_use_browser():
+                self.block = info or self.block
+                raise
+            self.block = info
+            self.switched = True
+            self.transport = 'chrome'
+            print(f"脚本请求被拒（HTTP {info['code']}·{BLOCK_LABELS[info['kind']]}），改用本机浏览器继续读取", flush=True)
+            time.sleep(max(1.0, self.delay))     # do not follow straight on the heels of the refusal
+            self.browser_attempts += 1           # the retry goes out through the other channel in place
+            try:
+                return self._fetch_browser(url)
+            except urllib.error.HTTPError as inner:   # both transports refused: report that one, not the first
+                self.block = block_info(inner) or info
+                raise
+
+    def _pace(self, url, kind):
+        """Deterministic jitter so consecutive requests are not metronomic; equal gaps read as a script."""
+        weight = 0.7 if kind == 'detail' else 1.0
+        fraction = int(hashlib.sha256(f'{url}|{kind}'.encode()).hexdigest()[:8], 16) / 0xffffffff
+        low, high = self.delay * weight, self.delay * weight * self.jitter_factor
+        target = low + (high - low) * fraction
+        time.sleep(max(0, target - (time.monotonic() - self.last)))
+        self.last = time.monotonic()
+
+    @staticmethod
+    def request_kind(url):
+        return 'detail' if '/job/' in url else 'list'
+
     def get(self, url):
         dest = self.cache / (hashlib.sha256(url.encode()).hexdigest() + '.html')
         if dest.exists() and not self.refresh and time.time() - dest.stat().st_mtime < 21600:
             return dest.read_text(encoding='utf-8')
-        time.sleep(max(0, self.delay - (time.monotonic() - self.last)))
-        self.last = time.monotonic()
-        self.requests += 1
+        kind = self.request_kind(url)
+        if self.quota is not None and not self.quota.allow(kind):
+            raise QuotaExhausted(kind)
+        self._pace(url, kind)
         html = self._fetch(url)
         state_from_html(html)  # Do not cache challenges or unrelated HTML.
+        if self.quota is not None:   # only a request that really left the machine spends the hour's share
+            self.quota.spend(kind)
+        self.requests += 1
         dest.write_text(html, encoding='utf-8')
         return html
 
 
 def run(args):
     state_dir = Path(getattr(args, 'state_dir', None) or ROOT)
-    fetch = Fetcher(state_dir / '.seek_cache', args.delay, args.refresh, getattr(args, 'impersonate', DEFAULT_IMPERSONATE))
+    block_path = Path(getattr(args, 'block_file', None) or state_dir / BLOCK_FILE)
+    queue_path = Path(getattr(args, 'queue_file', None) or state_dir / QUEUE_FILE)
+    quota = QuotaLedger(Path(getattr(args, 'quota_file', None) or state_dir / QUOTA_FILE),
+                        getattr(args, 'max_list_per_hour', MAX_LIST_PER_HOUR),
+                        getattr(args, 'max_details_per_hour', MAX_DETAILS_PER_HOUR))
+    fetch = Fetcher(state_dir / '.seek_cache', args.delay, args.refresh, getattr(args, 'impersonate', DEFAULT_IMPERSONATE),
+                    transport=getattr(args, 'transport', 'auto'), browser=getattr(args, 'browser_path', None),
+                    profile=getattr(args, 'profile_dir', None), quota=quota, jitter_factor=getattr(args, 'jitter_factor', JITTER_FACTOR))
     jobs, pages, errors, filtered = {}, [], [], {}
     now = datetime.now(timezone.utc).isoformat()
-    stopped = rate_limited = False
+    block_state = load_json(block_path)
+    # A cool-down only means stay home when no other transport can answer; otherwise keep working.
+    deferred = cooldown_open(block_state) and fetch.transport != 'chrome' and not fetch.can_use_browser()
+    stopped = rate_limited = deferred
+    quota_stop = None          # which hourly budget ran out, if any
+    if deferred:   # the window is still open: report it without spending a single request on it
+        errors.append(f"SEEK 仍在退避中（{BLOCK_LABELS.get(block_state.get('kind'), '访问受限')} HTTP {block_state.get('code')}，"
+                      f"约至 {block_state.get('until')}）；本轮未发出请求")
     keywords = args.keywords if args.keywords is not None else MODE_KEYWORDS[args.mode]
     expanded = getattr(args, 'expanded_search', False)
     plan = search_plan(args.mode, keywords, getattr(args, 'include_remote', True)) if expanded and args.keywords is None else [(k, 'ict') for k in keywords]
@@ -322,20 +659,36 @@ def run(args):
                 cursor = saved
         except (OSError, ValueError):
             pass
-    start = int(cursor.get('next', 0)) % len(plan)
-    plan_indices = [(start + i) % len(plan) for i in range(len(plan))]
+    # An empty keyword list is legal (the caller asked only for a backlog drain); modulo by zero is not.
+    lanes = len(plan) or 1
+    start = int(cursor.get('next', 0)) % lanes
+    plan_indices = [(start + i) % lanes for i in range(len(plan))]
     page_budget = args.max_pages * 4 if args.mode == 'focused' else args.max_pages
     excluded_subclasses = args.exclude_subclass.split(',') if args.exclude_subclass else []
     known = set()
     if args.known_ids:
         known = {line.strip() for line in Path(args.known_ids).read_text(encoding='utf-8').splitlines() if line.strip()}
     pending = []
-    if args.pending_ids:
-        for line in Path(args.pending_ids).read_text(encoding='utf-8').splitlines():
-            ident = line.strip()
-            if ident and ident not in known and ident not in pending:
-                pending.append(ident)
-    backlog_only = expanded and bool(pending) and len(pending) >= max(args.max_details, 1)
+
+    def add_pending(ident):
+        ident = str(ident).strip()
+        if ident.isdigit() and ident not in known and ident not in pending:   # a ledger row we hold is never owed
+            pending.append(ident)
+
+
+    if args.pending_ids:   # ids the caller knows only by title, most wanted first (the ledger's own backlog)
+        try:
+            for line in Path(args.pending_ids).read_text(encoding='utf-8').splitlines():
+                add_pending(line)
+        except OSError as exc:
+            errors.append(f'待补读清单无法读取：{exc}')
+    queued_before = load_queue(queue_path)   # ids an interrupted round promised but the ledger cannot know about
+    for ident in queued_before:              # no JD text means no ledger row, so this file is what keeps them alive
+        add_pending(ident)
+    # A drain needs at least one detail slot to spend; a search-only round must still resume its lanes.
+    forced_backlog = bool(getattr(args, 'backlog_only', False)) and bool(pending) and args.max_details > 0
+    backlog_only = forced_backlog or (expanded and bool(pending) and args.max_details > 0
+                                      and len(pending) >= max(args.max_details, 1))
     if backlog_only:
         pending_budget_override = args.max_details
     # Details first: the few requests SEEK allows go to jobs already listed, then to search pages.
@@ -344,9 +697,9 @@ def run(args):
     pending_budget = min(budget, max(1, budget // 2)) if expanded and budget else budget
     if backlog_only:
         pending_budget = pending_budget_override
-    pending_done = False
+    pending_done = deferred   # while a cool-down holds the door shut nothing was attempted at all
     def read_pending():
-        nonlocal budget, stopped, rate_limited, pending_done
+        nonlocal budget, stopped, rate_limited, pending_done, quota_stop
         if pending_done:
             return
         pending_done = True
@@ -359,11 +712,16 @@ def run(args):
                 continue
             budget -= 1
             outcome = read_detail(fetch, job, errors)
+            if outcome == 'quota':      # no share left this hour; hand the slot back and stay owed to it
+                budget += 1
+                quota_stop = 'detail'
+                stopped = True
+                break
             if outcome == 'stop':
                 stopped = True
-                rate_limited = job['detail_error'] in ('HTTP 403', 'HTTP 429')
+                rate_limited = blocked_by(job) or rate_limited
                 break
-    if not expanded or backlog_only:
+    if (not expanded or backlog_only) and not deferred:   # a cool-down round attempts nothing at all
         read_pending()
     for plan_index in (plan_indices if not stopped and not backlog_only else []):
         keyword, scope = plan[plan_index]
@@ -416,18 +774,31 @@ def run(args):
                 for job in (page_jobs[:max(budget, 0)] if not stopped else []):
                     budget -= 1
                     outcome = read_detail(fetch, job, errors)
+                    if outcome == 'quota':      # the hour's share ran out mid-page; keep that job owed
+                        budget += 1
+                        quota_stop = 'detail'
+                        stopped = True
+                        break
                     if outcome == 'stop':
                         stopped = True
-                        rate_limited = rate_limited or job['detail_error'] in ('HTTP 403', 'HTTP 429')
+                        rate_limited = blocked_by(job) or rate_limited
                         break
                 if stopped:
                     break
 
                 if not cards or not more:
                     break
+            except QuotaExhausted as exc:       # prevention, not reaction: stop before the edge objects again
+                quota_stop = exc.kind
+                label = '列表页' if exc.kind == 'list' else '详情页'
+                errors.append(f'Search {keyword} page {page}: 本小时{label}请求配额已用完（剩余 {quota.remaining(exc.kind)}），下轮继续')
+                stopped = True
+                break
             except Exception as exc:
-                errors.append(f'Search {keyword} page {page}: {exc}')
-                rate_limited = rate_limited or (isinstance(exc, urllib.error.HTTPError) and exc.code in (403, 429))
+                refused = block_info(exc) if isinstance(exc, urllib.error.HTTPError) else None
+                detail = f'HTTP {exc.code}' if isinstance(exc, urllib.error.HTTPError) else str(exc)
+                errors.append(f'Search {keyword} page {page}: {detail}')
+                rate_limited = bool(refused) or rate_limited
                 stopped = True
                 break
         if stopped or (expanded and page_budget <= 0):
@@ -438,7 +809,12 @@ def run(args):
     for job in ordered:
         if job['job_id'] in known:
             job['detail_status'] = '已入账，未重新读取'
-    if stopped:
+    if stopped and quota_stop:      # an exhausted hourly share is a pause, not a broken listing page
+        reason = '未读取（本小时请求配额已用完，下轮继续）'
+        interrupted_detail = any(j['detail_status'].startswith('读取失败') for j in jobs.values())
+        for job in to_read:
+            job['detail_status'] = '未读取（详情采集中断）' if interrupted_detail else reason
+    elif stopped:
         interrupted_detail = any(j['detail_status'].startswith('读取失败') for j in jobs.values())
         for job in to_read:
             job['detail_status'] = '未读取（详情采集中断）' if interrupted_detail else '未读取（搜索中断）'
@@ -447,9 +823,14 @@ def run(args):
             job['detail_status'] = '未读取（本次数量上限）'
         for job in to_read[:max(budget, 0)]:
             outcome = read_detail(fetch, job, errors)
+            if outcome == 'quota':      # the hour ran out while draining the tail; leave it owed, not failed
+                budget += 1
+                quota_stop = 'detail'
+                stopped = True
+                break
             if outcome == 'stop':
                 stopped = True
-                rate_limited = rate_limited or job['detail_error'] in ('HTTP 403', 'HTTP 429')
+                rate_limited = blocked_by(job) or rate_limited
                 break
     for job in ordered:
         if job['detail_status'] == '待处理':
@@ -457,6 +838,40 @@ def run(args):
     pending_read = sum(jobs[i]['detail_status'] == '已读取完整JD' for i in pending if i in jobs)
     final_pages = {p['keyword']: p for p in pages}
     incomplete = stopped or any(p['more'] for p in final_pages.values()) or (expanded and (len(final_pages) < len(plan) or any(p > 1 for p in cursor['pages'].values())))
+
+    # The backlog is kept outside the ledger on purpose: a listing without a JD never becomes a row, so an
+    # interrupted round would otherwise lose those ids forever. A cool-down round leaves the file untouched.
+    owed = []
+    for job in ordered:                                       # junior titles first, matching how they were promised
+        ident = str(job['job_id'])
+        if ident in known or job['detail_status'] == '已读取完整JD':
+            continue                                          # already held, or read this round: nothing further owed
+        if job['detail_status'].startswith('读取失败') and not blocked_by(job):
+            continue                                          # an unreadable page must not cost requests forever
+        owed.append(ident)                                    # refused, deferred, or simply past this run's cap
+    listed = {str(job['job_id']) for job in ordered}          # anything this round never saw at all stays promised
+    owed += [ident for ident in pending if ident not in listed]   # earlier promises are honoured before new ones
+    queue_written = None                       # None: untouched this round (a cool-down round writes nothing)
+    queue_remaining = len(load_queue(queue_path)) if deferred else len(owed)
+    if not deferred:
+        queue_written = bool(save_queue(queue_path, owed))
+
+    refusal = fetch.block if isinstance(fetch.block, dict) else None
+    if refusal is None:
+        row = next((j for j in ordered if j.get('block_kind')), None)
+        refusal = dict(kind=row['block_kind'], code=row['block_code'], retry_after=None) if row else None
+    cooldown_until = block_state.get('until') if deferred else None
+    now_utc = datetime.now(timezone.utc)
+    if rate_limited and refusal and not deferred:             # name the wait instead of guessing at one
+        minutes = CHALLENGE_COOLDOWN_MINUTES if refusal.get('kind') == 'challenge' else THROTTLE_COOLDOWN_MINUTES
+        if refusal.get('retry_after'):
+            minutes = max(minutes, int(refusal['retry_after'] // 60))
+        cooldown_until = (now_utc + timedelta(minutes=minutes)).isoformat()
+        save_json(block_path, dict(kind=refusal.get('kind'), code=refusal.get('code'), retry_after=refusal.get('retry_after'),
+                                   blocked_at=now_utc.isoformat(), until=cooldown_until, queue=len(owed), transport_used=fetch.transport))
+    elif not rate_limited and block_state:                    # a round that got through means the window has passed
+        save_json(block_path, {})
+
     rows = [assess(j) for j in ordered]
     run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
     run_dir = args.output / 'runs' / run_id
@@ -466,13 +881,22 @@ def run(args):
         card_filtered=len(filtered), card_filtered_jobs=list(filtered.values()),
         known_skipped=sum(job['job_id'] in known for job in rows),
         pending_requested=len(pending), pending_read=pending_read, backlog_only=backlog_only,
+        backlog_forced=forced_backlog, queue_local_requested=len(queued_before), queue_written=queue_written,
+        queue_remaining=queue_remaining, queue_file=str(queue_path if not deferred else ''),
         detail_deferred=sum(not j["description"] and j["job_id"] not in known for j in rows),
         full_descriptions=sum(bool(j['description']) for j in rows), network_requests=fetch.requests,
-        max_pages_per_keyword=args.max_pages, max_details=args.max_details,
+        http_attempts=fetch.http_attempts, browser_attempts=fetch.browser_attempts, transport=fetch.transport,
+        transport_switched=bool(fetch.switched), browser_available=(fetch.transport == 'chrome') or fetch.can_use_browser(),
+        blocked_by=(refusal or {}).get('kind'), block_code=(refusal or {}).get('code'), refusal_label=(BLOCK_LABELS.get((refusal or {}).get('kind')) if refusal else None),
+        cooldown_until=cooldown_until, deferred_for_cool_down=bool(deferred), quota_exhausted=quota_stop,
+        quota_persisted=bool(quota.persisted), quota_list_remaining=quota.remaining('list'),
+        quota_detail_remaining=quota.remaining('detail'),
+        max_pages_per_keyword=args.max_pages, max_details=args.max_details, delay_seconds=args.delay,
+        jitter_factor=fetch.jitter_factor, hourly_list_limit=quota.limits['list'], hourly_detail_limit=quota.limits['detail'],
         stopped_early=stopped, rate_limited=rate_limited, errors=errors,
         search_truncated=incomplete, search_complete=not incomplete,
         search_plan=[dict(keyword=k, scope=sc) for k, sc in plan], resume_cursor=cursor if expanded else None,
-        note='Bounded collection; search totals can vary between page requests. No claim of complete SEEK coverage or confirmed visa eligibility. Cache TTL 6 hours.')
+        note='Bounded collection; search totals can vary between page requests. No claim of complete SEEK coverage or confirmed visa eligibility. Cache TTL 6 hours. A refusal writes a cool-down window and keeps unread ids in the local backlog queue; an anti-bot challenge is retried through a real browser first when one exists on this machine. Requests are paced with deterministic jitter and capped per rolling hour.')
     jd_dir = run_dir / 'jd'
     jd_dir.mkdir()
     report['jd_files'] = []
@@ -536,7 +960,25 @@ if __name__ == '__main__':
                         help='file of job ids already collected; listed but their details are not re-read')
     parser.add_argument('--pending-ids', type=Path, default=None,
                         help='file of job ids known only by title; their details are read first, before any search')
+    # Anti-bot handling: transport fallback, cool-down state, local backlog queue, hourly budgets.
+    parser.add_argument('--transport', choices=['auto', 'http', 'chrome'], default='auto',
+                        help='auto: scripted client until refused, then the local browser; chrome: always use the browser')
+    parser.add_argument('--browser-path', default=None, help='path to a Chromium-family browser for --transport chrome')
+    parser.add_argument('--profile-dir', type=Path, default=None, help='persistent browser profile kept between rounds (holds the passed check)')
+    parser.add_argument('--queue-file', type=Path, default=None, help=f'backlog of unread job ids (default <state-dir>/{QUEUE_FILE})')
+    parser.add_argument('--block-file', type=Path, default=None, help=f'refusal and cool-down state (default <state-dir>/{BLOCK_FILE})')
+    parser.add_argument('--quota-file', type=Path, default=None, help=f'rolling hourly request record (default <state-dir>/{QUOTA_FILE})')
+    parser.add_argument('--max-list-per-hour', type=int, default=MAX_LIST_PER_HOUR, dest='max_list_per_hour',
+                        help='search pages per rolling hour; they cost ~1.2 MB each and trigger refusals')
+    parser.add_argument('--max-details-per-hour', type=int, default=MAX_DETAILS_PER_HOUR, dest='max_details_per_hour',
+                        help='detail pages per rolling hour (~230 KB each); 0 disables details until the next hour')
+    parser.add_argument('--jitter-factor', type=float, default=JITTER_FACTOR, dest='jitter_factor',
+                        help='requests wait uniform(delay, delay*this); equal gaps read as a script')
+    parser.add_argument('--backlog-only', action='store_true', dest='backlog_only',
+                        help='drain owed job descriptions with no search-page requests at all (a post-refusal round)')
     args = parser.parse_args()
     if args.max_pages < 1 or args.max_details < 0 or args.delay < 1:
         parser.error('max-pages >= 1, max-details >= 0, delay >= 1 required')
+    if args.jitter_factor < 1 or args.max_list_per_hour < 0 or args.max_details_per_hour < 0:
+        parser.error('jitter-factor >= 1 and hourly budgets >= 0 required')
     raise SystemExit(run(args))
