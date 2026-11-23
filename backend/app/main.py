@@ -23,11 +23,14 @@ from .services.autopilot import Autopilot
 from .services.ledger import relink_jd_files
 from .services.worker import Worker
 
-PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>Job Application Assistant API</title>
+PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>Job Evidence RAG API</title>
 <body style="font-family:system-ui;margin:3rem;line-height:1.6">
-<h1>Job Application Assistant</h1>
+<h1>Job Evidence RAG</h1>
 <p>后端已运行。前端尚未构建：在 <code>frontend/</code> 运行 <code>npm run build</code> 后刷新本页。</p>
 <p>接口文档：<a href="/docs">/docs</a> · 健康检查：<a href="/api/health">/api/health</a></p></body>"""
+
+
+from .core.code_version import changed_files  # noqa: E402
 
 
 def create_app(settings: Settings | None = None, runner=None, autopilot_kwargs=None) -> FastAPI:
@@ -41,6 +44,7 @@ def create_app(settings: Settings | None = None, runner=None, autopilot_kwargs=N
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        changed_files(settings.project_root)   # remember the loaded code as it is at start-up
         relink_jd_files(session_factory, settings.jobs_dir)   # the project folder may have moved
         worker.recover()            # jobs a previous run left queued or half-done go back in the queue
         worker.start()
@@ -50,7 +54,7 @@ def create_app(settings: Settings | None = None, runner=None, autopilot_kwargs=N
         worker.stop()
         engine.dispose()  # release the SQLite file so the directory can be removed (tests, restarts)
 
-    app = FastAPI(title="Job Application Assistant", version="0.2", lifespan=lifespan)
+    app = FastAPI(title="Job Evidence RAG", version="0.2", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory

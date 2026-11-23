@@ -56,12 +56,14 @@ def list_jobs(status: str | None = Query(default=None), limit: int = Query(defau
 
 
 @router.post("/generate-ready", status_code=202)
-def generate_ready(worker=Depends(get_worker)):
+def generate_ready(level: str = "default", worker=Depends(get_worker)):
     """Queue every job waiting in the "ready" column, best fit first."""
     online, model = worker.model_online()
     if not online:
         raise HTTPException(503, f"本机模型服务不在线：{model}")
-    queued = worker.generate_ready()
+    if level not in ("default", "mid", "senior"):
+        raise HTTPException(400, "无效的岗位级别")
+    queued = worker.generate_ready(level)
     worker.events.publish("jobs", {"queued": queued})
     return {"queued": queued}
 
@@ -165,7 +167,7 @@ def submit_job(body: SubmitJobIn, request: Request, session: Session = Depends(g
     job.status = "queued"
     session.commit()
     task = worker.submit_full(jd_text=jd_text, jd_name=body.jd_name.strip(), with_interview=body.with_interview,
-                              job_id=job.id)
+                              job_id=job.id, force=True)
     return TaskOut(**task.to_dict())
 
 
@@ -195,7 +197,7 @@ def decide(job_id: int, body: DecisionIn, session: Session = Depends(get_session
     job.status = "queued"
     session.commit()
     task = worker.submit_full(jd_name=job.company or job.title, with_interview=body.with_interview, job_id=job.id,
-                              jd_path=Path(job.jd_path))
+                              jd_path=Path(job.jd_path), force=True)   # a decision on the page passes the coverage gate
     return TaskOut(**task.to_dict())
 
 

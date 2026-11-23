@@ -213,8 +213,15 @@ class EvidenceMatcher:
         self.top_k = top_k
         self.timeout_seconds = timeout_seconds
 
-    def match_all(self, requirements):
-        return [self.match_requirement(requirement) for requirement in requirements]
+    def match_all(self, requirements, log=None):
+        log = log or (lambda message: None)
+        matches = []
+        total = len(requirements)
+        for index, requirement in enumerate(requirements, 1):
+            log(f"[progress] 匹配证据 {index}/{total} · 已完成 {index - 1} 条")
+            matches.append(self.match_requirement(requirement))
+            log(f"[progress] 匹配证据 {index}/{total} · 已完成 {index} 条")
+        return matches
 
     def match_requirement(self, requirement):
         queries = [q.strip() for q in requirement.get("search_queries", []) if q.strip()]

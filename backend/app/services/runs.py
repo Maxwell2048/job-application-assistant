@@ -101,6 +101,23 @@ def condition_coverage(run_dir):
     return coverage
 
 
+def run_quality(run_dir):
+    """The run's quality.json (quality_report.py), or None before one was written."""
+    try:
+        return json.loads((Path(run_dir) / "quality.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def run_answers(run_dir, limit=10):
+    """Application-question answers for the run, newest first."""
+    try:
+        answers = json.loads((Path(run_dir) / "application_answers.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return list(reversed(answers))[:limit] if isinstance(answers, list) else []
+
+
 def run_meta(run_dir):
     try:
         return json.loads((Path(run_dir) / "run_meta.json").read_text(encoding="utf-8"))
@@ -125,7 +142,9 @@ def run_summary(run_dir):
             "has_resume": "resume_tailored" in stems or latest_docx(run_dir, "resume") is not None,
             "generation_date": generation_date,
             "application_status": "unsubmitted", "submitted_at": None,
-            "can_interview": "resume_tailored" in stems and "interview_prep" not in stems}
+            "can_interview": "resume_tailored" in stems and "interview_prep" not in stems,
+            "has_suggestions": latest_output(run_dir, "cv_suggestions", ".json") is not None,
+            "quality": run_quality(run_dir), "answers": run_answers(run_dir)}
 
 
 def safe_run_dir(outputs_dir, run_id):

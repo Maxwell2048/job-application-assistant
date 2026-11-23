@@ -7,7 +7,7 @@ import { isArchivedJob } from './jobVisibility'
 import { ArchivePage, AutopilotPage, Board, JobPage, RunsPage, SettingsPage, SubmitPage } from './pages'
 
 const NAV = [
-  ['board', '📋 看板'], ['resumes', '📅 简历投递'], ['archive', '📦 已归档岗位'], ['submit', '✍️ 手动提交'], ['autopilot', '🤖 自动处理'], ['runs', '🗂 历史运行'], ['settings', '⚙️ 设置'],
+  ['board', '岗位看板'], ['resumes', '简历与投递'], ['archive', '归档岗位'], ['submit', '添加岗位 JD'], ['autopilot', '岗位采集'], ['runs', '生成记录'], ['settings', '系统设置'],
 ] as const
 
 export default function App() {
@@ -30,7 +30,13 @@ export default function App() {
     const timer = window.setInterval(() => api.health().then(setHealth).catch(() => setHealth(null)), 15000)
     return () => window.clearInterval(timer)
   }, [])
-  useEvents(refresh)
+  useEvents((event) => {
+    if (event.type === 'task' && (event.data as Task)?.status === 'running') {
+      api.tasks().then(setTasks).catch(() => undefined)
+      return
+    }
+    refresh()
+  })
 
   const boardJobs = jobs.filter((j) => !isArchivedJob(j))
   const archivedJobs = jobs.filter(isArchivedJob)
@@ -40,7 +46,7 @@ export default function App() {
   return (
     <div className="shell">
       <aside className="side">
-        <div className="brand">求职 RAG</div>
+        <div className="brand">Job Assistant<span>求职申请工作台</span></div>
         <nav className="nav">
           {NAV.map(([key, label]) => (
             <a key={key} href={`#/${key}`} className={page === key ? 'active' : ''}>
@@ -62,7 +68,12 @@ export default function App() {
           </div>
           <div>队列：{health?.queue.current ? '1 个在生成' : '空闲'}{health && health.queue.waiting.length > 0 ? `，${health.queue.waiting.length} 个等待` : ''}</div>
           {health?.queue.paused && <div className="msg bad">⏸ {health.queue.paused}</div>}
-          <div>自动处理：{health?.autopilot_enabled ? '定时开启' : '手动'}</div>
+          {(health?.restart_needed?.length ?? 0) > 0 && (
+            <div className="msg bad" title={health?.restart_needed?.join('\n')}>
+              ⟳ 后端代码已更新（{health?.restart_needed?.length} 个文件），重启后端（start.bat）后生效；筛选和采集仍按旧规则运行
+            </div>
+          )}
+          <div>定时采集：{health?.autopilot_enabled ? '定时开启' : '手动'}</div>
           <div>看板：{boardJobs.length} 个岗位，{boardJobs.filter((j) => j.status === 'done').length} 份已生成</div>
         </div>
       </aside>
@@ -80,7 +91,7 @@ export default function App() {
             ))}
           </div>
         )}
-        {page === 'board' && <Board jobs={boardJobs} onOpen={(id) => go(`jobs/${id}`)} version={version} onToast={showToast} onChanged={refresh} />}
+        {page === 'board' && <Board jobs={boardJobs} archivedJobs={archivedJobs} onOpen={(id) => go(`jobs/${id}`)} version={version} onToast={showToast} onChanged={refresh} />}
         {page === 'jobs' && route[1] && <JobPage id={Number(route[1])} tasks={tasks} onToast={showToast} refresh={version} onChanged={refresh} />}
         {page === 'submit' && (
           <SubmitPage online={!!health?.online} onToast={showToast}

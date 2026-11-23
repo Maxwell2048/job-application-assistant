@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { excludeArchivedResumes, groupResumes } from '../src/resumeGroups.ts'
+import { excludeArchivedResumes, groupResumes, partitionApplicationResumes } from '../src/resumeGroups.ts'
 import type { RunSummary } from '../src/api.ts'
 
 const run = (id: string, date: string, status: 'submitted' | 'unsubmitted' = 'unsubmitted'): RunSummary => ({
@@ -41,4 +41,34 @@ test('skipping a job excludes all its resume versions from active counts and gro
 test('server archive flag excludes a resume even when its job is outside the loaded page', () => {
   const rows = [{ ...run('skipped', '2026-10-13'), job_id: 61, archived: true }, run('active', '2026-10-13')]
   assert.deepEqual(excludeArchivedResumes(rows, new Set()).map((r) => r.run_id), ['active'])
+})
+
+
+test('submitted version removes unused versions across dates from pending without marking them sent', () => {
+  const rows = [{ ...run('old', '2026-10-15'), job_id: 427 },
+    { ...run('new', '2026-10-16', 'submitted'), job_id: 427 }]
+  const { active, history } = partitionApplicationResumes(rows)
+  assert.deepEqual(active.map((r) => r.run_id), ['new'])
+  assert.deepEqual(history.map((r) => r.run_id), ['old'])
+  assert.deepEqual(groupResumes(active, 'unsubmitted'), [])
+  assert.equal(rows[0].application_status, 'unsubmitted')
+})
+
+test('server submission metadata works outside loaded runs and never merges by company/title', () => {
+  const rows = [{ ...run('older', '2026-10-15'), job_id: 427, job_application_status: 'submitted' as const },
+    { ...run('different-posting', '2026-10-16'), job_id: 443 }, run('unlinked', '2026-10-16')]
+  const { active, history } = partitionApplicationResumes(rows)
+  assert.deepEqual(active.map((r) => r.run_id), ['different-posting', 'unlinked'])
+  assert.deepEqual(history.map((r) => r.run_id), ['older'])
+})
+
+test('clearing the final submission restores pending versions; another actual submission still counts', () => {
+  const first = { ...run('first', '2026-10-15', 'submitted'), job_id: 427 }
+  const second = { ...run('second', '2026-10-16', 'submitted'), job_id: 427 }
+  const unused = { ...run('unused', '2026-10-16'), job_id: 427 }
+  const partial = partitionApplicationResumes([{ ...first, application_status: 'unsubmitted' }, second, unused])
+  assert.deepEqual(partial.active.map((r) => r.run_id), ['second'])
+  const cleared = partitionApplicationResumes([first, second, unused].map((r) => ({ ...r, application_status: 'unsubmitted' as const })))
+  assert.equal(cleared.active.length, 3)
+  assert.equal(cleared.history.length, 0)
 })

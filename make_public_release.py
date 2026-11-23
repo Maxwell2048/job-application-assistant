@@ -25,6 +25,7 @@ INCLUDE_FILES = [
     "add_jd.py", "build_resume.py", "build_site.py", "evidence_matcher.py", "export_docx.py",
     "import_uwa_kb.py", "interview_prep.py", "jd_parser.py", "job_identity.py", "job_summary.py", "local_llm.py",
     "location_gate.py", "match_job.py", "report_writer.py", "search_experience.py", "tailor_cv.py",
+    "job_family.py", "resume_skills.py", "resume_review.py", "quality_report.py", "application_answer.py",
     "docs/jd_matcher_spec.md",
     "examples/experiences/demo_project.md", "examples/junior_developer_jd.txt",
     "tests/run_eval.py", "tests/eval_jd.txt", "tests/public_eval_set.json", "tests/public_eval_jd.txt",
@@ -37,7 +38,8 @@ INCLUDE_TESTS = [
     "test_job_identity.py", "test_job_summary.py", "test_local_llm.py", "test_match_job.py", "test_report_writer.py",
     "test_retriever.py", "test_sources.py", "test_tailor_cv.py",
     "test_public_release.py", "test_public_eval.py", "test_location_gate.py",
-    "test_quote_tolerance.py",
+    "test_quote_tolerance.py", "test_local_model_routing.py", "test_resume_skills.py", "test_resume_review.py",
+    "test_quality_fixes.py", "test_assembly_recovery.py", "test_llm_structured_output.py",
 ]
 # Whole directories copied file by file (caches and compiled files skipped).
 INCLUDE_DIRS = ["backend", "frontend/src", "frontend/tests", "tools/seek_collector"]

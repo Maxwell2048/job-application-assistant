@@ -248,15 +248,26 @@ def senior_by_rule(jd):
     return ""
 
 
-_NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\b", re.I)
+_WORD_NUMBERS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen".split())}
+_NUMBER = re.compile(r"\d|\b(?:" + "|".join(list(_WORD_NUMBERS)[1:]) + r")\b", re.I)
+_COUNT = r"(\d{1,2}|" + "|".join(_WORD_NUMBERS) + r")(?:\s*\(\d{1,2}\))?"   # 'five (5) years'
 
 _YEARS_EXPERIENCE = re.compile(
-    r"\b(\d{1,2})\s*\+?\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?\+?\s*years?\b.{0,45}\bexperience\b", re.I)
+    r"\b" + _COUNT + r"\s*(\+)?\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?(\+)?\s*years?\b.{0,45}\bexperience\b", re.I)
 _MANDATORY = re.compile(r"\b(?:minimum|at least|must|required|essential|mandatory)\b", re.I)
+# A degree offered as an alternative ('a qualification and/or 2 years') is not a hard years requirement.
 _CONCESSION = re.compile(r"\b(?:or equivalent|preferred|desirable|ideally|advantage\w*|bonus|nice to have|graduates?"
-                         r"|junior|internships?|highly regarded)\b", re.I)
+                         r"|junior|internships?|highly regarded|and/or"
+                         r"|or (?:an? )?(?:relevant |related |tertiary )?(?:degree|qualification|diploma))\b", re.I)
+
+
+def _count(text):
+    text = text.casefold()
+    return int(text) if text.isdigit() else _WORD_NUMBERS.get(text, 0)
 _HEADING_MANDATORY = re.compile(r"\b(?:essential|required|requirements|must[- ]haves?|mandatory)\b", re.I)
-_HEADING_OPTIONAL = re.compile(r"\b(?:desirable|preferred|nice to have|bonus|advantage\w*|highly regarded)\b", re.I)
+_HEADING_OPTIONAL = re.compile(r"\b(?:desirable|preferred|ideally|nice to have|bonus|advantage\w*|highly regarded)\b",
+                               re.I)
 # Section headings that end a requirement list. Collected JDs lose their bullet marks,
 # so a short plain line is not taken for a heading unless it looks like one.
 _SECTION_START = re.compile(r"(?:about|what|who|why|how|your|the role|key|benefits|skills|qualifications|requirements"
@@ -283,18 +294,22 @@ def mandatory_years_by_rule(jd, max_years):
     A clause is mandatory by its own wording or by the heading of the list it
     sits under; any concession ("or equivalent", "graduates welcome") voids
     it. More than 15 years is company history, not a requirement."""
-    heading_mandatory = False
+    heading_mandatory = heading_optional = False
     for line in (jd or "").splitlines():
         heading = _heading(line.strip(" \t-•*·"))
         if heading is not None:
             heading_mandatory = heading
+            heading_optional = bool(_HEADING_OPTIONAL.search(line))
             continue
         for clause in _CLAUSES.split(line):
             found = _YEARS_EXPERIENCE.search(clause)
             if not found or _CONCESSION.search(clause):
                 continue
-            years = int(found.group(1))
-            if max_years < years <= 15 and (_MANDATORY.search(clause) or heading_mandatory):
+            years = _count(found.group(1))
+            # 'N+ years' states a floor and reads as a requirement without 'minimum',
+            # except in a list the JD itself calls optional ("You'll ideally have:")
+            plus = bool(found.group(2) or found.group(3)) and not heading_optional
+            if max_years < years <= 15 and (_MANDATORY.search(clause) or heading_mandatory or plus):
                 return years, clause.strip()
     return 0, ""
 
@@ -430,7 +445,8 @@ def fit_decision(fit, title, rules, settings):
         flags.append(f"模型认为需要约 {fit['min_years']} 年经验，但原句没有具体年限，需核实")
     elif fit["min_years"] > max_years:
         if fit["years_mandatory"] and rules["years"] > max_years:
-            skips.append(f"硬性要求 {rules['years']} 年以上经验（可接受上限 {max_years} 年）")
+            skips.append(f"硬性要求 {rules['years']} 年以上工作经验：{rules.get('years_clause', '')[:100]}"
+                         + (f"（可接受上限 {max_years} 年）" if max_years else ""))
         else:
             flags.append(f"提到 {fit['min_years']} 年经验，"
                          + ("规则未确认是硬性要求" if fit["years_mandatory"] else "不是硬性要求") + "，需核实")

@@ -78,6 +78,32 @@ class PublicReleaseTests(unittest.TestCase):
             self.assertNotIn(marker, stderr.getvalue())
 
 
+class ReleaseCompletenessTests(unittest.TestCase):
+    def test_released_code_imports_only_released_root_modules(self):
+        """A root module imported by released code must be released too,
+        otherwise the public copy fails on import while the private one passes."""
+        import ast
+        root = release.PROJECT_ROOT
+        released = [name for name in release.INCLUDE_FILES if name.endswith(".py")]
+        released += ["tests/" + name for name in release.INCLUDE_TESTS]
+        released += [name for name in release.list_dir_files() if name.endswith(".py")]
+        missing = set()
+        for name in released:
+            tree = ast.parse((root / name).read_text(encoding="utf-8-sig"), filename=name)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                    modules = [node.module]
+                else:
+                    continue
+                for module in modules:
+                    top = module.split(".")[0] + ".py"
+                    if (root / top).is_file() and top not in release.INCLUDE_FILES:
+                        missing.add(f"{top} (imported by {name})")
+        self.assertEqual(sorted(missing), [])
+
+
 class DirectoryListingTests(unittest.TestCase):
     def test_include_dirs_skip_caches_and_compiled_files(self):
         with tempfile.TemporaryDirectory() as tmp:

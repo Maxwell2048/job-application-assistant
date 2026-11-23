@@ -68,6 +68,30 @@ class ResumeApplicationTests(ApiTestCase):
         rows = client.get("/api/runs?resumes_only=true").json()
         self.assertTrue(all(r["job_id"] == job_id and r["company"] == "Example" for r in rows))
 
+    def test_job_submission_is_resolved_before_limit_without_changing_version_records(self):
+        client = self.start(FakeRunner(self.outputs))
+        old, new = "20261015-120000-aaaaaa", "20261016-120000-bbbbbb"
+        self.make_run(old); self.make_run(new)
+        with client.app.state.session_factory() as session:
+            job = Job(source="seek", external_id="same-posting", title="Developer", company="Example", status="done")
+            session.add(job); session.flush()
+            session.add_all([RagRun(job_id=job.id, run_id=old), RagRun(job_id=job.id, run_id=new)])
+            session.commit()
+        client.put(f"/api/runs/{old}/application", json={"submitted": True})
+        row = client.get("/api/runs?resumes_only=true&limit=1").json()[0]
+        self.assertEqual(row["run_id"], new)
+        self.assertEqual(row["application_status"], "unsubmitted")
+        self.assertEqual(row["job_application_status"], "submitted")
+        self.assertEqual(row["job_submitted_run_id"], old)
+        self.assertTrue(row["job_submitted_at"].endswith("+00:00"))
+        with client.app.state.session_factory() as session:
+            self.assertIsNone(session.get(ResumeApplication, new))
+        client.put(f"/api/runs/{old}/application", json={"submitted": False})
+        row = client.get("/api/runs?resumes_only=true&limit=1").json()[0]
+        self.assertEqual(row["job_application_status"], "unsubmitted")
+        self.assertIsNone(row["job_submitted_run_id"])
+        self.assertIsNone(row["job_submitted_at"])
+
     def test_archive_state_independent_of_job_page(self):
         client = self.start(FakeRunner(self.outputs))
         run_id = "20261013-120000-aaaaaa"

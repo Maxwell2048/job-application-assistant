@@ -324,6 +324,19 @@ class ExtractRequirementsTests(unittest.TestCase):
             ],
         }
 
+    def test_singleton_groups_do_not_discard_requirements(self):
+        for members in ([], ["Python experience"], ["Python experience"] * 2):
+            response = self.response()
+            response["requirement_groups"].append({
+                "operator": "AND", "requirement_texts": members,
+                "source_quote": "Python or Java experience is required."})
+            self.assertEqual(validate_against_schema(response, EXTRACTION_SCHEMA), [])
+            result = extract_requirements(JD, FakeLLM(response))
+            self.assertFalse(result["failed_batches"])
+            self.assertEqual(len(result["requirements"]), 6)
+            self.assertEqual(len(result["requirement_groups"]), 2)
+            self.assertTrue(any("不足两条" in warning for warning in result["warnings"]))
+
     def test_ids_spans_and_groups(self):
         llm = FakeLLM(self.response())
         doc = extract_requirements(JD, llm)

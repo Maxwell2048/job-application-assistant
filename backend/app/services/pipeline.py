@@ -10,6 +10,8 @@ import json
 import os
 import re
 import shutil
+import queue
+import threading
 import subprocess
 import sys
 import time
@@ -19,7 +21,8 @@ from pathlib import Path
 
 from ..core import paths  # noqa: F401  (puts the engine on sys.path)
 import add_jd
-from local_llm import load_config
+from local_llm import CALL_LOG_ENV, load_config
+from .runs import condition_coverage
 
 PYTHON = sys.executable
 
@@ -30,16 +33,51 @@ STAGES = [("save", "保存 JD"), ("match", "提取与匹配"), ("tailor", "CV �
 def run_command(args, cwd, task=None):
     """Default stage runner: (returncode, stdout, stderr). The process is
     registered on the task so that a cancel request can stop it."""
-    process = subprocess.Popen([PYTHON, "-X", "utf8", *args], cwd=cwd, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    env = None
+    if getattr(task, "llm_log", None):
+        env = {**os.environ, CALL_LOG_ENV: str(task.llm_log)}   # one log line per model request
+    process = subprocess.Popen([PYTHON, "-u", "-X", "utf8", *args], cwd=cwd, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env)
     if task is not None:
         task.process = process
+    messages = queue.Queue()
+    output = {"stdout": [], "stderr": []}
+
+    def read_stream(name, stream):
+        try:
+            for line in stream:
+                messages.put((name, line))
+        finally:
+            stream.close()
+            messages.put((name, None))
+
+    readers = [threading.Thread(target=read_stream, args=(name, stream), daemon=True)
+               for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))]
+    for reader in readers:
+        reader.start()
+    closed = 0
     try:
-        stdout, stderr = process.communicate()
+        while closed < 2:
+            try:
+                name, line = messages.get(timeout=1)
+            except queue.Empty:
+                line, name = "", None
+            if name is not None:
+                if line is None:
+                    closed += 1
+                    continue
+                output[name].append(line)
+            callback = getattr(task, "on_progress", None)
+            if callback:
+                callback(line.strip())
+        process.wait()
     finally:
+        for reader in readers:
+            reader.join()
         if task is not None:
             task.process = None
-    return process.returncode, stdout, stderr
+    return process.returncode, "".join(output["stdout"]), "".join(output["stderr"])
+
 
 
 def kill_tree(process):
@@ -69,12 +107,17 @@ class Cancelled(RuntimeError):
     pass
 
 
+REDO_STEPS = {"tailor": "tailor", "closing": "tailor", "assemble": "build", "export": "docx"}
+
+
 class Task:
     """kind "full" runs every stage for a JD; kind "interview" adds interview
-    prep to a run that already exists."""
+    prep to a run that already exists; kind "redo" repeats the later stages of
+    a finished run from `redo` ("tailor", "closing" = summary and letter only,
+    "assemble", "export") without matching the JD again."""
 
     def __init__(self, kind="full", jd_name="", with_interview=False, run_dir=None, job_id=None,
-                 jd_path=None):
+                 jd_path=None, redo=None, force=False):
         self.id = uuid.uuid4().hex[:8]
         self.kind = kind
         self.jd_name = jd_name or ""
@@ -88,6 +131,14 @@ class Task:
             is_interview = stage["key"] == "interview"
             if (kind == "interview" and not is_interview) or (kind == "full" and is_interview and not with_interview):
                 stage["status"] = "skipped"
+        if kind == "answer":   # one stage of its own: answering an application question
+            self.stages = [{"key": "answer", "label": "回答申请问题", "status": "pending", "seconds": None,
+                            "message": ""}]
+        if kind == "redo":
+            first = [k for k, _ in STAGES].index(REDO_STEPS[redo])
+            for index, stage in enumerate(self.stages):
+                if index < first or stage["key"] == "interview":
+                    stage["status"] = "skipped"
         if kind == "full" and jd_path is not None:
             self.stage("save")["status"] = "skipped"  # the JD is already a file (inbox/SEEK)
         self.run_dir = Path(run_dir) if run_dir else None
@@ -98,6 +149,10 @@ class Task:
         self.cancel_requested = False
         self.priority = 0      # set by the worker's queue: lower runs first
         self.attempt = 1       # a failed full generation is tried once more
+        self.redo = redo
+        self.force = force     # generate even when the evidence covers few of the job's conditions
+        self.llm_log = None    # per-task model call log, copied into the run directory
+        self.request = None    # kind "answer": {"id", "question", "max_words"}
 
     def stage(self, key):
         return next(s for s in self.stages if s["key"] == key)
@@ -105,6 +160,7 @@ class Task:
     def to_dict(self):
         return {"id": self.id, "kind": self.kind, "jd_name": self.jd_name, "job_id": self.job_id,
                 "created_at": self.created_at, "status": self.status, "error": self.error, "attempt": self.attempt,
+                "redo": self.redo,
                 "run_id": Path(self.run_dir).name if self.run_dir else None, "stages": self.stages}
 
 
@@ -119,6 +175,8 @@ class Pipeline:
         self.outputs_dir = Path(settings.outputs_dir)
         self.resume_path = Path(settings.resume_path)
         self.config_path = Path(settings.config_path)
+        self.gate = float(getattr(settings, "coverage_gate_max_gap_share", 0) or 0)
+        self.calls_dir = self.outputs_dir / "_llm_calls"
         self.runner = runner
         self.on_change = on_change or (lambda task: None)
 
@@ -134,12 +192,47 @@ class Pipeline:
         except Exception as exc:  # noqa: BLE001 - any failure means "offline" for the page
             return False, str(exc)
 
+    def model_preflight(self):
+        """One synthetic, source-validated extraction; no user run is created."""
+        from local_llm import build_llm
+        from jd_parser import extract_requirements
+        try:
+            config = load_config(self.config_path)
+            config = {**config, "max_output_tokens": min(config["max_output_tokens"], 4096)}
+            llm = build_llm(config)
+            llm.max_attempts = 1
+            result = extract_requirements("Requirements\nPython development is required.", llm, timeout_seconds=45)
+            if result["failed_batches"] or not result["requirements"]:
+                reason = result["failed_batches"][0]["message"] if result["failed_batches"] else "没有提取到测试要求"
+                return False, "JD 提取预检失败：" + reason[:240]
+            return True, config["model"]
+        except Exception as exc:
+            return False, "模型结构预检失败：" + str(exc)[:240]
+
     # -- helpers ------------------------------------------------------------
     def _step(self, task, key, func):
         stage = task.stage(key)
         stage["status"] = "running"
         self.on_change(task)
         started = time.time()
+        last_update = 0.0
+        last_output = started
+        latest = "正在处理，请稍候"
+
+        def progress(line):
+            nonlocal last_update, last_output, latest
+            now = time.time()
+            if line.startswith("[progress] ") or line.startswith("[match-job] "):
+                latest = line.split("] ", 1)[1][:240]
+                last_output = now
+            if now - last_update >= 2:
+                stage["seconds"] = round(now - started, 1)
+                quiet = int(now - last_output)
+                stage["message"] = latest + (f" · 等待模型返回 {quiet}s" if quiet >= 10 else "")
+                self.on_change(task)
+                last_update = now
+
+        task.on_progress = progress
         try:
             message = func()
             stage["status"] = "done"
@@ -149,6 +242,7 @@ class Pipeline:
             stage["message"] = str(exc)
             raise
         finally:
+            task.on_progress = None
             stage["seconds"] = round(time.time() - started, 1)
             self.on_change(task)
 
@@ -184,6 +278,7 @@ class Pipeline:
     # -- the two task kinds -------------------------------------------------
     def run_full(self, task, jd_text=None):
         task.status = "running"
+        task.llm_log = self.calls_dir / f"{task.id}.jsonl"
         self.on_change(task)
         try:
             if task.jd_path is None:
@@ -214,33 +309,11 @@ class Pipeline:
                 return status.group(1) if status else ""
             self._step(task, "match", match)
 
-            def tailor():
-                code, stdout, _ = self._cli("tailor_cv.py", "--run", str(task.run_dir), "--resume",
-                                            str(self.resume_path), "--config", str(self.config_path),
-                                            ok_codes=(0, 1), task=task)
-                return "partial（部分步骤失败，见 CV 建议末尾）" if code == 1 else ""
-            self._step(task, "tailor", tailor)
-
-            def build():
-                self._cli("build_resume.py", "--run", str(task.run_dir), "--resume",
-                          str(self.resume_path), "--config", str(self.config_path), task=task)
-                return ""
-            self._step(task, "build", build)
-
-            def docx():
-                # Company and job title for the file names; a failure only means plainer names.
-                code, identity, _ = self._cli("job_identity.py", "--run", str(task.run_dir), "--config",
-                                              str(self.config_path), ok_codes=(0, 1), task=task)
-                label = ["--label", task.jd_name] if task.jd_name else []
-                _, stdout, _ = self._cli("export_docx.py", "--run", str(task.run_dir), "--letter", *label,
-                                         task=task)
-                named = identity.strip().splitlines()[-1] if code == 0 and identity.strip() else "未识别出公司"
-                return f"{stdout.count('已写入')} 个文件 · {named}"
-            self._step(task, "docx", docx)
-
-            if task.with_interview:
-                self._step(task, "interview", lambda: self._interview(task))
-            task.status = "done"
+            if not self._below_gate(task):
+                self._later_stages(task, "tailor")
+                if task.with_interview:
+                    self._step(task, "interview", lambda: self._interview(task))
+                task.status = "done"
         except Cancelled:
             self._finish_cancelled(task)
         except LocationBlocked as exc:
@@ -256,6 +329,132 @@ class Pipeline:
             else:
                 task.status = "failed"
                 task.error = str(exc)
+        self._collect_calls(task)
+        self.on_change(task)
+        return task
+
+    # -- stages shared by full and redo tasks ------------------------------------
+    def _later_stages(self, task, start):
+        """tailor -> build -> docx (with the quality report), from `start` on."""
+        if start in ("tailor", "closing"):
+            def tailor():
+                extra = ["--letter-only", "--redo-closing"] if start == "closing" else []
+                code, stdout, _ = self._cli("tailor_cv.py", "--run", str(task.run_dir), "--resume",
+                                            str(self.resume_path), "--config", str(self.config_path), *extra,
+                                            ok_codes=(0, 1), task=task)
+                return "partial（部分步骤失败，见 CV 建议末尾）" if code == 1 else ""
+            self._step(task, "tailor", tailor)
+        if start in ("tailor", "closing", "assemble"):
+            def build():
+                self._cli("build_resume.py", "--run", str(task.run_dir), "--resume",
+                          str(self.resume_path), "--config", str(self.config_path), task=task)
+                return ""
+            self._step(task, "build", build)
+
+        def docx():
+            # Company and job title for the file names; a failure only means plainer names.
+            code, identity, _ = self._cli("job_identity.py", "--run", str(task.run_dir), "--config",
+                                          str(self.config_path), ok_codes=(0, 1), task=task)
+            label = ["--label", task.jd_name] if task.jd_name else []
+            _, stdout, _ = self._cli("export_docx.py", "--run", str(task.run_dir), "--letter", *label,
+                                     task=task)
+            named = identity.strip().splitlines()[-1] if code == 0 and identity.strip() else "未识别出公司"
+            return f"{stdout.count('已写入')} 个文件 · {named}" + self._quality(task)
+        self._step(task, "docx", docx)
+
+    def _quality(self, task):
+        """Write quality.json for the run; ' · 质量：…' for the stage message, '' if it failed."""
+        self._collect_calls(task)
+        try:
+            _, stdout, _ = self._cli("quality_report.py", "--run", str(task.run_dir), "--resume",
+                                     str(self.resume_path), ok_codes=(0, 1, 2), task=task)
+        except Cancelled:
+            raise
+        except Exception:  # noqa: BLE001 - a missing report must not fail a finished resume
+            return ""
+        found = re.search(r"质量：(.+)", stdout or "")
+        return f" · 质量：{found.group(1).strip()}" if found else ""
+
+    def _below_gate(self, task):
+        """Stop an automatically queued job whose evidence covers too few of the
+        job's conditions; the match report stays and generation can be resumed
+        from the job page. True when the task stopped here."""
+        if task.force or not self.gate or task.run_dir is None:
+            return False
+        coverage = condition_coverage(task.run_dir)
+        total = coverage.get("total", 0)
+        if total < 5:
+            return False
+        gaps = coverage.get("insufficient", 0) + coverage.get("error", 0)
+        if gaps / total <= self.gate:
+            return False
+        task.status = "low_coverage"
+        task.error = (f"证据覆盖不足：{total} 项入职条件中 {gaps} 项证据不足（超过 {self.gate:.0%}），"
+                      "已停止生成，只保留匹配报告；可在岗位页继续生成")
+        for stage in task.stages:
+            if stage["status"] == "pending":
+                stage["status"], stage["message"] = "skipped", "证据覆盖不足，未生成"
+        return True
+
+    def _collect_calls(self, task):
+        """Move the task's model call log into the run directory (appending)."""
+        log = getattr(task, "llm_log", None)
+        if not log or task.run_dir is None or not Path(log).is_file() or not Path(task.run_dir).is_dir():
+            return
+        try:
+            with open(Path(task.run_dir) / "llm_calls.jsonl", "a", encoding="utf-8") as target:
+                target.write(Path(log).read_text(encoding="utf-8"))
+            Path(log).unlink()
+        except OSError:
+            pass
+
+    def run_redo(self, task):
+        """Repeat the later stages of an existing run (see Task)."""
+        task.status = "running"
+        task.llm_log = self.calls_dir / f"{task.id}.jsonl"
+        self.on_change(task)
+        try:
+            self._later_stages(task, task.redo)
+            task.status = "done"
+        except Exception as exc:  # noqa: BLE001
+            if task.cancel_requested:
+                task.status, task.error = "cancelled", "已中止；已生成的文件保留"
+                for stage in task.stages:
+                    if stage["status"] == "running":
+                        stage["status"], stage["message"] = "cancelled", "已中止"
+                    elif stage["status"] == "pending":
+                        stage["status"] = "skipped"
+            else:
+                task.status = "failed"
+                task.error = str(exc)
+        self._collect_calls(task)
+        self.on_change(task)
+        return task
+
+    def run_answer(self, task):
+        """Answer one application-form question from the run's verified material."""
+        task.status = "running"
+        task.llm_log = self.calls_dir / f"{task.id}.jsonl"
+        self.on_change(task)
+        request = Path(task.run_dir) / f"answer_request-{task.id}.json"
+        try:
+            request.write_text(json.dumps(task.request, ensure_ascii=False), encoding="utf-8")
+
+            def answer():
+                code, stdout, stderr = self._cli("application_answer.py", "--run", str(task.run_dir), "--resume",
+                                                 str(self.resume_path), "--config", str(self.config_path),
+                                                 "--request", str(request), ok_codes=(0, 1), task=task)
+                if code == 1:
+                    raise RuntimeError(((stderr or stdout).strip().splitlines() or ["回答生成失败"])[-1][:300])
+                return stdout.strip().splitlines()[-1] if stdout.strip() else ""
+            self._step(task, "answer", answer)
+            task.status = "done"
+        except Exception as exc:  # noqa: BLE001
+            task.status = "cancelled" if task.cancel_requested else "failed"
+            task.error = "已中止" if task.cancel_requested else str(exc)
+        finally:
+            request.unlink(missing_ok=True)
+        self._collect_calls(task)
         self.on_change(task)
         return task
 

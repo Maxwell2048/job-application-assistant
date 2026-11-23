@@ -165,27 +165,48 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             self.assertIn("'1,288'", errors[0])
 
-    def test_trim_projects_enforces_page_budget(self):
+    def test_trim_projects_selects_a_focused_view_and_keeps_source_citations(self):
+        import copy
         def block(name, bullets):
-            return [{"kind": "heading", "text": name, "basis": []}] + [
-                {"kind": "bullet", "text": f"{name} bullet {i}", "basis": []} for i in range(1, bullets + 1)]
+            return [{"kind": "heading", "text": name, "basis": [{"quote": name}]}] + [
+                {"kind": "bullet", "text": f"{name} bullet {i}", "basis": [{"quote": f"source {i}"}]}
+                for i in range(1, bullets + 1)]
         key = {"title": "KEY PROJECTS", "lines": sum((block(f"P{i}", 6) for i in range(1, 8)), [])}
-        other = {"title": "Additional Projects", "lines": sum((block(f"A{i}", 3) for i in range(1, 5)), [])}
-        skills = {"title": "TECHNICAL SKILLS", "lines": [{"kind": "text", "text": "Python", "basis": []}] * 9}
+        other = {"title": "Additional Projects", "lines": block("A1", 3)}
+        skills = {"title": "TECHNICAL SKILLS", "lines": [{"kind": "text", "text": f"Skill {i}", "basis": []} for i in range(9)]}
+        original = copy.deepcopy([key, other, skills])
         trimmed, notes = build_resume.trim_projects([key, other, skills])
-        key_lines = trimmed[0]["lines"]
-        self.assertEqual([l["text"] for l in key_lines if l["kind"] == "heading"], ["P1", "P2", "P3", "P4", "P5"])
-        self.assertEqual(sum(l["kind"] == "bullet" for l in key_lines), 5 * 4)
-        self.assertEqual([l["text"] for l in key_lines if l["text"].startswith("P1 bullet")],
-                         ["P1 bullet 1", "P1 bullet 2", "P1 bullet 3", "P1 bullet 4"])
-        other_lines = trimmed[1]["lines"]
-        self.assertEqual([l["text"] for l in other_lines if l["kind"] == "heading"], ["A1", "A2", "A3"])
-        self.assertEqual(sum(l["kind"] == "bullet" for l in other_lines), 3 * 2)
-        self.assertEqual(len(trimmed[2]["lines"]), 9)  # non-project sections untouched
-        self.assertEqual(len(notes), 4)
-        self.assertIn("P6；P7", notes[0])
-        md = build_resume.render(trimmed, "cv_suggestions.json", "base.docx", {"run_id": "r"}, notes)
-        self.assertIn("篇幅裁剪：KEY PROJECTS：超过 5 个项目", md)
+        self.assertEqual([s["title"] for s in trimmed], ["KEY PROJECTS", "Additional Projects", "TECHNICAL SKILLS"])
+        lines = trimmed[0]["lines"]
+        self.assertEqual([l["text"] for l in lines if l["kind"] == "heading"], ["P1", "P2", "P3", "P4"])
+        self.assertEqual(sum(l["kind"] == "bullet" for l in lines), 16)
+        self.assertEqual(lines[1]["basis"], [{"quote": "source 1"}])
+        self.assertEqual(sum(l["kind"] == "bullet" for l in trimmed[1]["lines"]), 2)
+        self.assertEqual(len(trimmed[2]["lines"]), 9)  # keep supported skills
+        self.assertEqual([key, other, skills], original)
+        self.assertTrue(any("P5" in note for note in notes))
+        self.assertTrue(any("Additional Projects" in note for note in notes))
+
+    def test_repeated_project_sections_cannot_bypass_budget_and_language_facts_survive(self):
+        def project(name):
+            return [{"kind": "heading", "text": name, "basis": []},
+                    {"kind": "bullet", "text": "A supported fact", "basis": []}]
+        sections = [
+            {"title": "Projects", "lines": project("A") + project("B")},
+            {"title": "Selected Projects", "lines": project("C") + project("D") + project("E")},
+            {"title": "Self-Assessment", "lines": [{"kind": "text", "text": "Generic traits", "basis": []}]},
+            {"title": "Education", "lines": [{"kind": "text", "text": "Master of IT", "basis": []},
+                 {"kind": "text", "text": "Coursework: many unrelated courses", "basis": []}]},
+            {"title": "Languages", "lines": [{"kind": "text", "text": "Language Proficiency", "basis": []},
+                 {"kind": "text", "text": "English: IELTS 6.5", "basis": [{"quote": "IELTS 6.5"}]},
+                 {"kind": "text", "text": "Mandarin: Native", "basis": [{"quote": "Native"}]}]}]
+        trimmed, _ = build_resume.trim_projects(sections)
+        self.assertEqual([l["text"] for s in trimmed for l in s["lines"] if l["kind"] == "heading"], ["A", "B", "C", "D"])
+        self.assertNotIn("Self-Assessment", [s["title"] for s in trimmed])
+        self.assertEqual(trimmed[-2]["lines"][0]["text"], "Master of IT")
+        self.assertEqual(len(trimmed[-2]["lines"]), 2)
+        self.assertEqual(trimmed[-1]["lines"][0]["text"], "English: IELTS 6.5 | Mandarin: Native")
+        self.assertEqual(len(trimmed[-1]["lines"][0]["basis"]), 2)
 
     def test_build_strips_internal_marker(self):
         with tempfile.TemporaryDirectory() as tmp:

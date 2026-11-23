@@ -10,6 +10,8 @@ class HealthOut(BaseModel):
     model: str | None = None
     queue: dict[str, Any]
     autopilot_enabled: bool
+    # project files the running backend loaded that changed on disk since: restart to use them
+    restart_needed: list[str] = []
 
 
 class SubmitJobIn(BaseModel):
