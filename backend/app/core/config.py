@@ -47,8 +47,16 @@ class Settings(BaseSettings):
     seek_broad_max_pages: int = 15             # broad: total search pages per round
     seek_broad_max_details: int = 40
     seek_request_delay_seconds: float = 8.0    # between any two SEEK requests
+    # Measured on this machine: a burst of list pages at an even eight-second gap is refused for ~12-25 minutes by an anti-bot challenge carrying no Retry-After, so blind waiting is guesswork. These are the three answers instead: classify the refusal, keep unread ids in a file, and cap velocity before it objects.
+    seek_transport_mode: str = Field(default="auto", pattern="^(auto|http|chrome)$")   # auto switches to a local browser once refused
+    chrome_path: Path | None = None             # only when the browser is not in a standard install location (RAG_CHROME_PATH)
+    seek_max_list_per_hour: int = 12            # search pages cost ~1.2 MB each and are what trigger refusals
+    seek_max_details_per_hour: int = 40         # detail pages cost ~230 KB; 0 pauses them until the hour rolls over
+    seek_jitter_factor: float = 1.8             # requests wait uniform(delay, delay*this); equal gaps read as a script
     # Clear non-junior management subclasses dropped before detail requests
     seek_excluded_subclasses: str = "Management,Architects,Team Leaders,CTO/CIO"
+    model_auto_start: bool = True              # false: the user starts the model manually
+    model_preflight_enabled: bool = False      # validate real extraction schema before draining a batch
     model_launcher: Path | None = None         # the user's own script that starts llama-server
     model_start_timeout_seconds: int = 600
     retry_failed_generation: bool = True       # a failed full generation is queued once more
@@ -66,7 +74,10 @@ class Settings(BaseSettings):
 
     # -- fit gate (does an eligible job suit the candidate?) ---------------------
     fit_screen_enabled: bool = True
-    max_required_years: int = 2                # more *mandatory* years than this is a skip, if rule and model agree
+    # after matching, an automatically queued job stops (match report only) when more than this share
+    # of its conditions lack evidence; 0 turns the gate off. Page decisions always generate.
+    coverage_gate_max_gap_share: float = 0.7
+    max_required_years: int = 0                # any *mandatory* years of experience is a skip, if rule and model agree
     fit_skip_levels: list[str] = Field(default_factory=lambda: ["mid", "senior"])  # skipped when the JD says so too
     # run: no remark; flag: run with a remark; skip: out, if the title has no technical word either
     role_family_actions: dict[str, str] = Field(default_factory=lambda: {

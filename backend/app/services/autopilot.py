@@ -128,6 +128,10 @@ class Autopilot:
         if online:
             report["model_online"] = True
             return True
+        if not self.settings.model_auto_start:
+            report["model_online"] = False
+            report["notes"].append("模型离线，等待用户手动启动；本轮不会自动启动模型")
+            return False
         if not self.settings.model_launcher:
             report["model_online"] = False
             report["notes"].append(f"模型离线且未配置启动脚本：{info}")
@@ -208,14 +212,35 @@ class Autopilot:
                     known_ids = session.scalars(select(Job.external_id).where(Job.source == "seek",
                                                                               Job.jd_sha256 != "")).all()
                     pending_ids = self._pending_ids(session)
+                # Still standing down from a refusal, and something is owed? Then this round reads details only:
+                # list pages are ~1.2 MB each and are what got us refused, so they wait for a clearer hour.
+                drain_only = seek_source.cool_down_open(self.settings) and bool(seek_source.queued_ids(self.settings))
                 found, info = seek_source.collect(self.settings, max_pages, max_details, mode=mode,
-                                                  known_ids=known_ids, pending_ids=pending_ids, **kwargs)
+                                                  known_ids=known_ids, pending_ids=pending_ids, backlog_only=drain_only, **kwargs)
                 report["sources"]["seek"] = {"items": len(found), **info}
                 if info.get("pending_requested"):
                     report["notes"].append(f"先读取只有标题的岗位详情：{info.get('pending_read', 0)} / "
                                            f"{info['pending_requested']} 个")
-                if info.get("rate_limited"):
-                    report["notes"].append("SEEK 限流（HTTP 429/403），本轮采集提前结束；没有完整 JD 的结果不入账")
+                if info.get("deferred_for_cool_down"):
+                    report["notes"].append("SEEK 仍在退避窗口内，本轮未发出任何请求；补抓队列与搜索分页进度原样保留")
+                elif info.get("rate_limited"):   # name the refusal instead of blaming "429/403" in general
+                    label, code = info.get("refusal_label"), info.get("block_code")
+                    head = f"{label}（HTTP {code}）" if label and code else (label or "HTTP 429/403 访问受限")
+                    notes = [f"SEEK {head}：本轮采集提前结束，没有完整 JD 的结果不入账"]
+                    until = seek_source.format_cooldown(info.get("cooldown_until"))
+                    if until:
+                        notes.append(f"约至 {until} 前不再用脚本请求 SEEK")   # measured lockouts run ~12-25 minutes; waiting is stated, not guessed at
+                    if info.get("transport_switched"):
+                        notes.append("脚本请求被拒后已自动改用本机浏览器继续读取剩余条目")
+                    elif not info.get("browser_available"):
+                        notes.append("本机没有可用的浏览器兜底通道，只能等退避窗口过去")
+                    owed = info.get("queue_remaining")
+                    if isinstance(owed, int):
+                        notes.append(f"未读岗位 {owed} 个已存入本地补抓队列（与看板无关），下轮优先读取详情")
+                    report["notes"].append("；".join(notes))
+                if info.get("quota_exhausted"):   # a spent hourly budget is a pause, not an access problem
+                    which = {"list": "搜索列表页", "detail": "详情页"}.get(str(info.get("quota_exhausted")), "请求")
+                    report["notes"].append(f"本小时{which}配额已用完，剩余岗位留在补抓队列中，下轮继续（这不是访问受限）")
                 items += found
             except Exception as exc:  # noqa: BLE001 - the inbox still gets processed
                 report["sources"]["seek"] = {"error": str(exc)}
@@ -279,7 +304,9 @@ class Autopilot:
     def _pending_ids(session):
         """SEEK jobs known only by title, the ones worth a request first: junior or
         graduate titles, then the most recently seen. A job skipped by hand is
-        screened_out, not no_jd, so it never spends a request."""
+        screened_out, not no_jd, so it never spends a request. This is only half of the backlog:
+        a listing that never produced a JD has no row here at all, so the collector keeps its own
+        queue file beside its cache and merges it in; see seek_source.queued_ids."""
         jobs = session.scalars(select(Job).where(Job.source == "seek", Job.status == "no_jd", Job.jd_sha256 == "")
                                .order_by(Job.last_seen.desc(), Job.id.desc())).all()
         wanted = [j for j in jobs if screening.junior_by_rule(j.title, "")]
@@ -328,7 +355,7 @@ class Autopilot:
                     job.note = (job.note + "\n" if job.note else "") + "\n".join(flags)
                 brief = self._brief(job, verdict["reason"], verdict["quote"])
                 priority = PRIORITY_SCREENED + screening.fit_rank(fit, self.settings)
-                if not generate:
+                if not generate or (fit or {}).get("level") in ("mid", "senior"):
                     job.status = "ready"
                     report["ready"].append({**brief, "rank": priority, "decision": verdict["decision"]})
                     session.commit()

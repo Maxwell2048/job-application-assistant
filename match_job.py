@@ -202,7 +202,7 @@ def execute(args, jd_path, config_path, run_dir, log):
             }
             meta["experience_files"] = _experience_hashes(Path(args.data))
             matcher = EvidenceMatcher(llm, retriever, top_k=args.top_k)
-            matches = matcher.match_all(doc["requirements"])
+            matches = matcher.match_all(doc["requirements"], log=log)
             meta["errors"].extend(_judgment_errors(matches))
             meta["run_status"] = overall_status(matches)
             if failed_batches and meta["run_status"] == "complete":

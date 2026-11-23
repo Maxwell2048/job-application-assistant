@@ -94,6 +94,7 @@ Edit the copied configuration:
 | `timeout_seconds` | Per-request timeout |
 | `response_format` | `json_object`, `json_schema`, or `none`, according to server support |
 | `extra_body` | Optional server-specific request settings |
+| `local_model_endpoints` | Optional list of loopback endpoints tried in order, each `{"base_url": ..., "model": ...}`; the first one whose `/v1/models` reports a listed model as loaded is used. Add `"models": [...]` to an entry when different engines on the same port report different names for the same model |
 
 The example includes a model-specific thinking-mode setting. Remove or adapt it if your server does not support it. There is no automatic cloud fallback: the configured endpoint receives personal source text, so keep it local if local processing is required.
 

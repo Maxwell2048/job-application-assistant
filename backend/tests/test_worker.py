@@ -360,3 +360,43 @@ class ScreeningRecoveryTests(WorkerCase):
             self.assertEqual(latest.rule_result["work_rights"]["processing_status"], "error")
         ambiguous = Screening(rule_result={"work_rights": {"processing_status": "ok", "reason": "Requirement ambiguous"}, "fit": {"decision": "run", "flags": ["普通提示"]}}, model_verdict="unclear")
         self.assertFalse(screening_failed(ambiguous))
+
+
+class ModelReadinessTests(WorkerCase):
+    def enable_preflight(self):
+        self.worker.settings=self.settings.model_copy(update={"model_preflight_enabled":True,"model_auto_start":False,"model_launcher":self.root/"start-model.bat"})
+
+    def test_offline_wait_never_starts_model_when_manual_mode_is_selected(self):
+        self.enable_preflight();self.stub_generation()
+        self.worker.pipeline.model_online=lambda:(False,"offline")
+        with patch.object(worker_module,"MODEL_POLL_SECONDS",0.02):
+            task=self.worker.submit_full(jd_name="wait",jd_path=self.root/"x")
+            self.worker.start()
+            self.assertTrue(until(lambda:bool(self.worker.paused)))
+            self.assertEqual(task.status,"queued")
+            self.assertEqual(self.launched,[])
+            self.assertEqual(self.ran,[])
+
+    def test_port_online_but_invalid_json_preserves_queue_until_validation_passes(self):
+        self.enable_preflight();self.stub_generation()
+        valid={"ok":False};calls=[]
+        def check():
+            calls.append(True);return valid['ok'],"invalid JSON"
+        self.worker.pipeline.model_preflight=check
+        with patch.object(worker_module,"MODEL_POLL_SECONDS",0.02):
+            task=self.worker.submit_full(jd_name="validate",jd_path=self.root/"x")
+            self.worker.start()
+            self.assertTrue(until(lambda:"队列保留" in self.worker.paused))
+            self.assertEqual(task.status,"queued");self.assertEqual(self.ran,[])
+            valid['ok']=True;self.worker._validation_due=0
+            self.assertTrue(until(lambda:task.status=="done"))
+            self.assertEqual(len(calls),2)
+
+    def test_structural_failure_does_not_repeat_the_whole_generation(self):
+        self.enable_preflight()
+        task=self.worker.submit_full(jd_name="bad",jd_path=self.root/"x")
+        task.status="failed";task.error="无法从模型输出中解析出 JSON 对象"
+        before=len(self.worker.tasks)
+        self.worker._retry_if_failed(task)
+        self.assertEqual(len(self.worker.tasks),before)
+        self.assertIn("停止整任务自动重试",self.worker.paused)
