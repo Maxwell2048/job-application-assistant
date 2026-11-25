@@ -132,6 +132,7 @@ def rank_sections(chunks, scores, top_k):
 
 class ExperienceRetriever:
     """Reusable E5 retriever: one model load and one corpus encode per task."""
+    framework = "native"
 
     def __init__(self, data_dir, offline=False, all_sections=False):
         self.data_dir = Path(data_dir)
@@ -201,6 +202,20 @@ class ExperienceRetriever:
         )[0]
         scores = self.vectors @ query_vector
         return rank_sections(self.chunks, scores, top_k)
+
+
+RETRIEVERS = ("native", "langchain")
+
+
+def make_retriever(name, data_dir, offline=False):
+    """The retriever named in the config: "native" (default) or "langchain"
+    (LangChain vector store, imported only when chosen)."""
+    if name in (None, "", "native"):
+        return ExperienceRetriever(data_dir, offline=offline)
+    if name == "langchain":
+        from langchain_retrieval import LangChainExperienceRetriever
+        return LangChainExperienceRetriever(data_dir, offline=offline)
+    raise ValueError(f"未知检索器 {name!r}；可用：{'、'.join(RETRIEVERS)}")
 
 
 def search_experience(query, folder, top_k=5, offline=False, all_sections=False):
