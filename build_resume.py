@@ -21,7 +21,7 @@ from pathlib import Path
 
 from local_llm import LLMError, build_llm, load_config
 from job_family import HEADLINES, headline_for, job_family, job_title  # noqa: F401 (re-exported)
-from resume_skills import apply_to_sections
+from resume_skills import LLM_FRAMEWORKS, apply_to_sections
 from resume_review import review_projects
 from tailor_cv import (WORK_TYPE, RESUME_ID, KIND_LABELS, UNVERIFIED_KINDS, CVTailor, _attach_sources, latest_output,
                        load_materials, load_run, read_resume, requirement_summary, stale_citations, validate_basis, non_english,
@@ -402,7 +402,8 @@ def build(llm, suggestions, materials, resume_entry, jd_text, timeout_seconds=No
     family = job_family(job_title(jd_text))
     return apply_to_sections(normalize_headings(sections), resume_entry, jd_text,
                              declared_first=family == "ai", research_last=family not in ("ai", None),
-                             extra_lines=productivity_line(jd_text, materials) + networking_line(jd_text, materials))
+                             extra_lines=productivity_line(jd_text, materials) + networking_line(jd_text, materials)
+                             + frameworks_line(jd_text, materials))
 
 
 # Where each headline term is stated, for the citation (base resume, else profile).
@@ -515,6 +516,29 @@ def networking_line(jd_text, materials):
         line = next((l.strip() for l in m["text"].splitlines() if "Asuswrt-Merlin" in l and "刷入" in l), None)
         if line:
             return [{"kind": "text", "text": NETWORKING, "basis": [
+                {"material_id": m["material_id"], "quote": line, "kind": m["kind"], "source": m["source"],
+                 "section": m["section"], "line_start": m["line_start"], "line_end": m["line_end"]}]}]
+    return []
+
+
+FRAMEWORKS_JD = re.compile(r"\blang(?:chain|graph)\b|\bllms?\b|\bagent(?:ic|s)?\b|\brag\b|retrieval[- ]augmented"
+                           r"|generative ai|\bgen ?ai\b|large language model|\borchestrat", re.I)
+
+
+def frameworks_line(jd_text, materials):
+    """'LLM Frameworks: LangChain · LangGraph' for AI and software roles, or a
+    JD that asks about LLMs, agents or RAG. Cited from the profile's
+    2026-11-25 confirmation, which also states what is not claimed."""
+    family = job_family(job_title(jd_text))
+    if family not in ("ai", "software", "data") and not FRAMEWORKS_JD.search(jd_text or ""):
+        return []
+    for m in materials:
+        if m["kind"] != "profile":
+            continue
+        line = next((l.strip() for l in m["text"].splitlines()
+                     if "LangChain" in l and "LangGraph" in l and "确认" in l), None)
+        if line:
+            return [{"kind": "text", "text": LLM_FRAMEWORKS, "basis": [
                 {"material_id": m["material_id"], "quote": line, "kind": m["kind"], "source": m["source"],
                  "section": m["section"], "line_start": m["line_start"], "line_end": m["line_end"]}]}]
     return []
