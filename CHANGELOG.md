@@ -4,6 +4,27 @@ Notable changes to this project. The format follows [Keep a Changelog](https://k
 entries link to the commit or pull request that made the change. The project has no numbered releases yet,
 so changes are grouped by date.
 
+## 2026-11-25
+
+### Added
+
+- LangGraph engine: the backend generation stages run as a `StateGraph` (`backend/app/services/generation_graph.py`). The graph routes the entry point (save, match or a redo step), stops at the coverage gate, and runs interview preparation on request. Each run is checkpointed in memory, and its visited nodes and timings go to `graph_trace.json`. Default `RAG_GENERATION_ENGINE=langgraph`; `classic` keeps the plain Python flow. Tests run both engines and require identical results.
+- LangChain chat adapter `langchain_openai` (`langchain_client.py`): the same request through `ChatOpenAI`, with the existing validation, retries and error types. It refuses to start while LangSmith tracing is on.
+- LangChain retriever (`"retriever": "langchain"`, `langchain_retrieval.py`): the same E5 chunks in an `InMemoryVectorStore` with identical ranking, plus a `BaseRetriever` that returns one Document per section with citation metadata.
+- `docs/langchain-langgraph.md` describes the three switches, the graph and how equivalence was checked.
+- An `LLM Frameworks: LangChain · LangGraph` skills row (`build_resume.frameworks_line`). It is added for AI, software and data roles, or when the JD mentions LLMs, agents or RAG, and only when the profile records the candidate's confirmation, which it cites. It is grouped with the declared AI tooling rows. Tailoring prompt version 10.
+
+## 2026-11-24
+
+### Added
+
+- Internship search lanes: focused mode also searches `internship` and a quoted `intern` (so "Internal Tools" titles do not match), and those two lanes include SEEK's Casual/Vacation work type, where summer and vacation programmes are listed.
+- Fit screening asks whether a posting is only for current students (currently enrolled, penultimate or final year, returning to study). When the model and the wording rule agree, the job is skipped because a graduate cannot take it; when only one side sees it, the job runs with a hint. A posting that also accepts recent graduates is not treated as student-only. Switch with `RAG_FIT_SKIP_STUDENT_ONLY`. Fit prompt version 3.
+
+### Changed
+
+- Intern and internship wording counts as junior-level evidence in the collector and the fit screen, and an intern title is never dropped as senior before its JD is read.
+
 ## 2026-11-22
 
 ### Fixed
