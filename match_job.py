@@ -19,7 +19,7 @@ from pathlib import Path
 import jd_parser
 from location_gate import screen_location
 from local_llm import LLMError, build_llm, load_config
-from search_experience import MODEL as EMBEDDING_MODEL, ExperienceRetriever
+from search_experience import MODEL as EMBEDDING_MODEL, ExperienceRetriever, make_retriever  # noqa: F401
 from evidence_matcher import (JUDGMENT_PROMPT_VERSION, EvidenceMatcher)
 from report_writer import (overall_status, write_matches, write_report)
 from job_summary import generate_summary, save_summary, PROMPT_VERSION as SUMMARY_PROMPT_VERSION
@@ -193,12 +193,14 @@ def execute(args, jd_path, config_path, run_dir, log):
             meta["run_status"] = "partial" if failed_batches else "complete"
         else:
             log("[match-job] 正在加载向量模型并检索证据……")
-            retriever = ExperienceRetriever(Path(args.data),
-                                            offline=args.offline)
+            name = config.get("retriever") or "native"
+            retriever = (ExperienceRetriever(Path(args.data), offline=args.offline) if name == "native"
+                         else make_retriever(name, Path(args.data), offline=args.offline))
             retriever.build()
             meta["models"]["embedding"] = {
                 "name": EMBEDDING_MODEL,
                 "version": _embedding_version(),
+                "retriever": name,
             }
             meta["experience_files"] = _experience_hashes(Path(args.data))
             matcher = EvidenceMatcher(llm, retriever, top_k=args.top_k)

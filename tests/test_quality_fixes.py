@@ -302,6 +302,21 @@ class SupportRoleTests(unittest.TestCase):
         self.assertEqual(build_resume.networking_line("Title: Data Analyst\nSQL and Power BI.", [profile]), [])
         self.assertEqual(build_resume.networking_line("Title: IT Support Officer\n", [PROFILE]), [])
 
+    def test_llm_frameworks_row_is_cited_and_grouped_with_ai_tooling(self):
+        from resume_skills import LLM_FRAMEWORKS, LLM_TOOLING, order_by_jd
+        profile = {"material_id": "M011", "kind": "profile", "source": "profile.md", "section": "大模型应用",
+                   "line_start": 1, "line_end": 2,
+                   "text": "本人技能补充（2026-11-25 确认）：实际使用 LangChain 和 LangGraph。"}
+        row = build_resume.frameworks_line("Title: AI Engineer\nBuild LLM agents.", [profile])
+        self.assertEqual(row[0]["text"], LLM_FRAMEWORKS)
+        self.assertEqual(row[0]["basis"][0]["material_id"], "M011")
+        self.assertTrue(build_resume.frameworks_line("Title: Analyst\nExperience with LangChain.", [profile]))
+        self.assertEqual(build_resume.frameworks_line("Title: IT Support Officer\nPrinters.", [profile]), [])
+        self.assertEqual(build_resume.frameworks_line("Title: AI Engineer\n", [PROFILE]), [])   # no confirmation
+        lines = [{"text": LLM_TOOLING}, {"text": "Languages: Python · SQL"}, row[0]]
+        ordered = [l["text"] for l in order_by_jd(lines, "Python and SQL")]
+        self.assertEqual(ordered, ["Languages: Python · SQL", LLM_TOOLING, LLM_FRAMEWORKS])
+
     def test_support_focus_reaches_bullet_prompts_for_it_jobs(self):
         from tailor_cv import CVTailor, FAMILY_FOCUS
 

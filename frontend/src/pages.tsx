@@ -10,7 +10,7 @@ import { isArchivedJob } from './jobVisibility'
 
 const MODE_LABEL: Record<SearchMode, string> = { focused: '定向搜索', broad: '扩展搜索' }
 const MODE_HINT: Record<SearchMode, string> = {
-  focused: '搜索初级关键词，以及开发、数据、BI、测试和支持等岗位；初级关键词限 ICT，数据、开发等岗位可跨分类，但需明确 IT 证据；补充全国远程。只将有完整 JD 的岗位送入筛选。',
+  focused: '搜索初级和实习关键词（实习另含假期项目），以及开发、数据、BI、测试和支持等岗位；初级关键词限 ICT，数据、开发等岗位可跨分类，但需明确 IT 证据；补充全国远程。只将有完整 JD 的岗位送入筛选。',
   broad: '搜索珀斯 ICT 全分类，补充跨分类相关岗位及全国远程职位。明确高级岗位先排除，混合级别留给 JD 审查；搜索分轮接续，并非每轮覆盖全部。',
 }
 /** What happens after a JD was handed over for screening. */

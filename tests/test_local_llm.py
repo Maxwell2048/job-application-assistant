@@ -208,7 +208,9 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(type(build_llm(make_config())), OpenAIHttpAdapter)
         with self.assertRaises(ConfigError):
             build_llm({"adapter": "missing"})
-        self.assertEqual(set(ADAPTERS), {"openai_http"})
+        # langchain_openai registers itself only once a config asks for it
+        self.assertLessEqual(set(ADAPTERS), {"openai_http", "langchain_openai"})
+        self.assertIn("openai_http", ADAPTERS)
 
     def test_missing_base_url_is_config_error(self):
         config = make_config()

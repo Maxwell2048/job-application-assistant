@@ -176,6 +176,9 @@ class Pipeline:
         self.resume_path = Path(settings.resume_path)
         self.config_path = Path(settings.config_path)
         self.gate = float(getattr(settings, "coverage_gate_max_gap_share", 0) or 0)
+        # "langgraph": the stages run as nodes of a LangGraph state graph (generation_graph);
+        # "classic": the same stages in plain Python control flow.
+        self.engine = getattr(settings, "generation_engine", "langgraph")
         self.calls_dir = self.outputs_dir / "_llm_calls"
         self.runner = runner
         self.on_change = on_change or (lambda task: None)
@@ -281,38 +284,8 @@ class Pipeline:
         task.llm_log = self.calls_dir / f"{task.id}.jsonl"
         self.on_change(task)
         try:
-            if task.jd_path is None:
-                def save():
-                    path = add_jd.save_jd(jd_text, self.jobs_dir, task.jd_name or None)
-                    task.jd_path = path
-                    return path.name
-                self._step(task, "save", save)
-
-            def match():
-                # Exit 1 covers both "failed" and "partial"; only the run metadata tells
-                # them apart, so accept it here and decide below.
-                code, stdout, stderr = self._cli("match_job.py", "--jd", str(task.jd_path), "--config",
-                                                 str(self.config_path), "--offline", "--out",
-                                                 str(self.outputs_dir), ok_codes=(0, 1, 3), task=task)
-                found = re.search(r"运行目录：(.+)", stdout)
-                if not found:
-                    tail = "\n".join((stderr or stdout).strip().splitlines()[-3:])
-                    raise RuntimeError(f"match_job 未报告运行目录（退出码 {code}）：{tail}")
-                task.run_dir = Path(found.group(1).strip())
-                if code == 3:
-                    screen = json.loads((task.run_dir / "location_screen.json").read_text(encoding="utf-8"))
-                    raise LocationBlocked(screen["message"] + "\n地点依据：" + screen["location_quote"]
-                                          + "\n出勤依据：" + screen["attendance_quote"])
-                if code == 1:
-                    return self._partial_match_message(task.run_dir)
-                status = re.search(r"状态：(\S+)", stdout)
-                return status.group(1) if status else ""
-            self._step(task, "match", match)
-
-            if not self._below_gate(task):
-                self._later_stages(task, "tailor")
-                if task.with_interview:
-                    self._step(task, "interview", lambda: self._interview(task))
+            self._flow(task, "match", jd_text)
+            if task.status == "running":   # not stopped by the coverage gate
                 task.status = "done"
         except Cancelled:
             self._finish_cancelled(task)
@@ -333,24 +306,83 @@ class Pipeline:
         self.on_change(task)
         return task
 
+    def _flow(self, task, start, jd_text=None):
+        """Run the stages of a full task (start "match") or a redo (start =
+        task.redo) through the configured engine. Both engines call the same
+        stage methods below and raise the same exceptions."""
+        if self.engine == "langgraph":
+            from .generation_graph import run_graph
+            return run_graph(self, task, start, jd_text)
+        if start == "match":
+            if task.jd_path is None:
+                self._save_step(task, jd_text)
+            self._match_step(task)
+            if self._below_gate(task):
+                return
+            start = "tailor"
+        self._later_stages(task, start)
+        if task.kind == "full" and task.with_interview:
+            self._interview_step(task)
+
+    # -- the stages ----------------------------------------------------------
+    def _save_step(self, task, jd_text):
+        def save():
+            path = add_jd.save_jd(jd_text, self.jobs_dir, task.jd_name or None)
+            task.jd_path = path
+            return path.name
+        self._step(task, "save", save)
+
+    def _match_step(self, task):
+        def match():
+            # Exit 1 covers both "failed" and "partial"; only the run metadata tells
+            # them apart, so accept it here and decide below.
+            code, stdout, stderr = self._cli("match_job.py", "--jd", str(task.jd_path), "--config",
+                                             str(self.config_path), "--offline", "--out",
+                                             str(self.outputs_dir), ok_codes=(0, 1, 3), task=task)
+            found = re.search(r"运行目录：(.+)", stdout)
+            if not found:
+                tail = "\n".join((stderr or stdout).strip().splitlines()[-3:])
+                raise RuntimeError(f"match_job 未报告运行目录（退出码 {code}）：{tail}")
+            task.run_dir = Path(found.group(1).strip())
+            if code == 3:
+                screen = json.loads((task.run_dir / "location_screen.json").read_text(encoding="utf-8"))
+                raise LocationBlocked(screen["message"] + "\n地点依据：" + screen["location_quote"]
+                                      + "\n出勤依据：" + screen["attendance_quote"])
+            if code == 1:
+                return self._partial_match_message(task.run_dir)
+            status = re.search(r"状态：(\S+)", stdout)
+            return status.group(1) if status else ""
+        self._step(task, "match", match)
+
+    def _interview_step(self, task):
+        self._step(task, "interview", lambda: self._interview(task))
+
     # -- stages shared by full and redo tasks ------------------------------------
     def _later_stages(self, task, start):
         """tailor -> build -> docx (with the quality report), from `start` on."""
         if start in ("tailor", "closing"):
-            def tailor():
-                extra = ["--letter-only", "--redo-closing"] if start == "closing" else []
-                code, stdout, _ = self._cli("tailor_cv.py", "--run", str(task.run_dir), "--resume",
-                                            str(self.resume_path), "--config", str(self.config_path), *extra,
-                                            ok_codes=(0, 1), task=task)
-                return "partial（部分步骤失败，见 CV 建议末尾）" if code == 1 else ""
-            self._step(task, "tailor", tailor)
+            self._tailor_step(task, start)
         if start in ("tailor", "closing", "assemble"):
-            def build():
-                self._cli("build_resume.py", "--run", str(task.run_dir), "--resume",
-                          str(self.resume_path), "--config", str(self.config_path), task=task)
-                return ""
-            self._step(task, "build", build)
+            self._build_step(task)
+        self._docx_step(task)
 
+    def _tailor_step(self, task, start="tailor"):
+        def tailor():
+            extra = ["--letter-only", "--redo-closing"] if start == "closing" else []
+            code, stdout, _ = self._cli("tailor_cv.py", "--run", str(task.run_dir), "--resume",
+                                        str(self.resume_path), "--config", str(self.config_path), *extra,
+                                        ok_codes=(0, 1), task=task)
+            return "partial（部分步骤失败，见 CV 建议末尾）" if code == 1 else ""
+        self._step(task, "tailor", tailor)
+
+    def _build_step(self, task):
+        def build():
+            self._cli("build_resume.py", "--run", str(task.run_dir), "--resume",
+                      str(self.resume_path), "--config", str(self.config_path), task=task)
+            return ""
+        self._step(task, "build", build)
+
+    def _docx_step(self, task):
         def docx():
             # Company and job title for the file names; a failure only means plainer names.
             code, identity, _ = self._cli("job_identity.py", "--run", str(task.run_dir), "--config",
@@ -414,7 +446,7 @@ class Pipeline:
         task.llm_log = self.calls_dir / f"{task.id}.jsonl"
         self.on_change(task)
         try:
-            self._later_stages(task, task.redo)
+            self._flow(task, task.redo)
             task.status = "done"
         except Exception as exc:  # noqa: BLE001
             if task.cancel_requested:
@@ -467,7 +499,7 @@ class Pipeline:
         task.status = "running"
         self.on_change(task)
         try:
-            self._step(task, "interview", lambda: self._interview(task))
+            self._interview_step(task)
             task.status = "done"
         except Exception as exc:  # noqa: BLE001
             if task.cancel_requested:

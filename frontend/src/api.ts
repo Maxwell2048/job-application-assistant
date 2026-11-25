@@ -150,7 +150,7 @@ export type Health = {
   restart_needed?: string[]
 }
 
-/** focused: graduate/junior/entry level/trainee keywords; broad: every ICT job in Perth */
+/** focused: graduate/junior/entry level/trainee/internship keywords; broad: every ICT job in Perth */
 export type SearchMode = 'focused' | 'broad'
 
 export type Brief = { job_id: number; title: string; company: string; url: string; reason: string; quote: string }

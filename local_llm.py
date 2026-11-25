@@ -25,6 +25,8 @@ import urllib.request
 from urllib.parse import urlsplit
 
 ADAPTERS = {}
+# Adapters that talk to an OpenAI-compatible endpoint (urllib or LangChain).
+OPENAI_COMPATIBLE = ("openai_http", "langchain_openai")
 
 # Prompt length is estimated in CHARACTERS; the service counts TOKENS. One CJK
 # character is roughly one token, so 1 char/token is the conservative default:
@@ -274,8 +276,8 @@ def resolve_local_model(config):
     endpoints = config.get("local_model_endpoints")
     if endpoints is None:
         return config
-    if config.get("adapter") != "openai_http" or not isinstance(endpoints, list) or not endpoints:
-        raise ConfigError("local_model_endpoints 需要 openai_http 适配器和非空端点列表")
+    if config.get("adapter") not in OPENAI_COMPATIBLE or not isinstance(endpoints, list) or not endpoints:
+        raise ConfigError("local_model_endpoints 需要 openai_http 或 langchain_openai 适配器和非空端点列表")
     # Validate every target before making any request.
     accepted = []
     for entry in endpoints:
@@ -365,6 +367,7 @@ def load_config(path):
     if not isinstance(config, dict):
         raise ConfigError("配置文件顶层必须是 JSON 对象")
     adapter_name = _require(config, "adapter", str, "配置缺少非空字符串字段 adapter（适配器类型）")
+    _load_optional_adapter(adapter_name)
     if adapter_name not in ADAPTERS:
         raise ConfigError(f"未知适配器类型 {adapter_name!r}；可用：{', '.join(sorted(ADAPTERS))}")
     _require(config, "model", str, "配置缺少非空字符串字段 model（生成模型名称）")
@@ -397,6 +400,8 @@ def load_config(path):
     config.setdefault("response_format", "json_object")
     if config["response_format"] not in {"json_object", "json_schema", "none"}:
         raise ConfigError("response_format 必须是 json_object、json_schema 或 none")
+    if config.setdefault("retriever", "native") not in ("native", "langchain"):
+        raise ConfigError("retriever 必须是 native 或 langchain")
     config.setdefault("extra_body", {})
     if not isinstance(config["extra_body"], dict):
         raise ConfigError("extra_body 必须是 JSON 对象（原样并入请求体的额外字段，"
@@ -579,6 +584,17 @@ class BaseAdapter:
         raise NotImplementedError
 
 
+def _load_optional_adapter(name):
+    """Register an adapter that lives in its own module, so LangChain is
+    imported only by a config that asks for it."""
+    if name == "langchain_openai" and name not in ADAPTERS:
+        try:
+            import langchain_client  # noqa: F401  (registers LangChainOpenAIAdapter)
+        except ImportError as exc:
+            raise ConfigError("langchain_openai 适配器需要 langchain-openai；请运行 "
+                              "python -m pip install -r requirements.txt") from exc
+
+
 def register_adapter(cls):
     ADAPTERS[cls.name] = cls
     return cls
@@ -718,6 +734,7 @@ def build_llm(config):
     if not isinstance(config, dict):
         raise ConfigError("config 必须是 JSON 对象解析后的 dict")
     adapter_name = config.get("adapter")
+    _load_optional_adapter(adapter_name)
     if adapter_name not in ADAPTERS:
         raise ConfigError(f"缺少或未知适配器类型 {adapter_name!r}；可用：{', '.join(sorted(ADAPTERS))}")
     return ADAPTERS[adapter_name](config)

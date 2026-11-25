@@ -90,6 +90,10 @@ Copy-Item config.local.example.json config.local.json
 | `response_format` | `json_object`、`json_schema` 或 `none`，视服务端支持而定 |
 | `extra_body` | 可选的服务端专有请求字段 |
 | `local_model_endpoints` | 可选，按顺序尝试的本机端点列表，每项为 `{"base_url": ..., "model": ...}`；使用第一个在 `/v1/models` 里报告所列模型已加载的端点。同一端口上不同引擎对同一个模型报告不同名字时，在该项里加 `"models": [...]` |
+| `adapter` | `openai_http`（直接 HTTP）或 `langchain_openai`（同样的请求经 LangChain 的 `ChatOpenAI` 发送；schema 校验、引用校验和重试不变）。必须关闭 LangSmith 追踪，因为提示词含个人材料 |
+| `retriever` | `native`（默认）或 `langchain`（同样的 E5 片段放进 LangChain 的 `InMemoryVectorStore`，排序相同） |
+
+后端默认把生成步骤作为 LangGraph 状态图运行（`RAG_GENERATION_ENGINE=langgraph`；`classic` 用普通 Python 依次运行同样的步骤）。说明见 [docs/langchain-langgraph.md](docs/langchain-langgraph.md)。
 
 样例里包含一个关闭特定模型"思考模式"的设置。如果你的服务不支持，删除或改写它。没有自动的云端回退：配置的接口会收到个人材料原文，需要本地处理时请保持接口在本机。
 

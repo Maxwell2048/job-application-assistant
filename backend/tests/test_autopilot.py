@@ -29,7 +29,7 @@ JD_CLEARANCE = ("Junior Analyst\n\nDue to the nature of the work you must be abl
 
 FIT_PLAIN = {"level": "unclear", "level_quote": "", "min_years": 0, "years_mandatory": False, "years_quote": "",
              "role_family": "software_dev", "required_stack": [], "degree": "unspecified", "degree_quote": "",
-             "constraints": [], "reason": "普通开发岗位"}
+             "constraints": [], "student_only": False, "student_quote": "", "reason": "普通开发岗位"}
 
 
 class FakeLLM:
