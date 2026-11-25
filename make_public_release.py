@@ -17,7 +17,7 @@ INCLUDE_FILES = [
     "README.md", "README.zh-CN.md", "CHANGELOG.md", "LICENSE", "requirements.txt", "requirements-test.txt",
     ".github/workflows/tests.yml", "config.local.example.json",
     "project_template.md", "start.bat", "make_public_release.py", ".env.example",
-    "requirements-backend.txt", "requirements-collector.txt", "docs/application-workflow.md", "Dockerfile.api", ".dockerignore", "compose.yaml", ".github/workflows/tests.yml",
+    "requirements-backend.txt", "requirements-collector.txt", "docs/application-workflow.md", "docs/langchain-langgraph.md", "Dockerfile.api", ".dockerignore", "compose.yaml", ".github/workflows/tests.yml",
     "frontend/package.json", "frontend/package-lock.json", "frontend/index.html", "frontend/vite.config.ts",
     "frontend/tsconfig.json", "frontend/tsconfig.app.json", "frontend/tsconfig.node.json", "frontend/.gitignore",
     "frontend/.oxlintrc.json", "frontend/Dockerfile", "frontend/.dockerignore", "frontend/nginx.conf",
@@ -26,6 +26,7 @@ INCLUDE_FILES = [
     "import_uwa_kb.py", "interview_prep.py", "jd_parser.py", "job_identity.py", "job_summary.py", "local_llm.py",
     "location_gate.py", "match_job.py", "report_writer.py", "search_experience.py", "tailor_cv.py",
     "job_family.py", "resume_skills.py", "resume_review.py", "quality_report.py", "application_answer.py",
+    "langchain_client.py", "langchain_retrieval.py",
     "docs/jd_matcher_spec.md",
     "examples/experiences/demo_project.md", "examples/junior_developer_jd.txt",
     "tests/run_eval.py", "tests/eval_jd.txt", "tests/public_eval_set.json", "tests/public_eval_jd.txt",
@@ -39,7 +40,7 @@ INCLUDE_TESTS = [
     "test_retriever.py", "test_sources.py", "test_tailor_cv.py",
     "test_public_release.py", "test_public_eval.py", "test_location_gate.py",
     "test_quote_tolerance.py", "test_local_model_routing.py", "test_resume_skills.py", "test_resume_review.py",
-    "test_quality_fixes.py", "test_assembly_recovery.py", "test_llm_structured_output.py",
+    "test_quality_fixes.py", "test_assembly_recovery.py", "test_llm_structured_output.py", "test_langchain_integration.py",
 ]
 # Whole directories copied file by file (caches and compiled files skipped).
 INCLUDE_DIRS = ["backend", "frontend/src", "frontend/tests", "tools/seek_collector"]

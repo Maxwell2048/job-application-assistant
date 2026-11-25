@@ -95,6 +95,10 @@ Edit the copied configuration:
 | `response_format` | `json_object`, `json_schema`, or `none`, according to server support |
 | `extra_body` | Optional server-specific request settings |
 | `local_model_endpoints` | Optional list of loopback endpoints tried in order, each `{"base_url": ..., "model": ...}`; the first one whose `/v1/models` reports a listed model as loaded is used. Add `"models": [...]` to an entry when different engines on the same port report different names for the same model |
+| `adapter` | `openai_http` (plain HTTP) or `langchain_openai` (the same request through LangChain's `ChatOpenAI`; schema checks, quote validation and retries are unchanged). LangSmith tracing must stay off, because prompts contain your source text |
+| `retriever` | `native` (default) or `langchain` (the same E5 chunks in a LangChain `InMemoryVectorStore`, with the same ranking) |
+
+The backend runs the generation stages as a LangGraph state graph by default (`RAG_GENERATION_ENGINE=langgraph`; `classic` runs the same stages in plain Python). See [docs/langchain-langgraph.md](docs/langchain-langgraph.md).
 
 The example includes a model-specific thinking-mode setting. Remove or adapt it if your server does not support it. There is no automatic cloud fallback: the configured endpoint receives personal source text, so keep it local if local processing is required.
 
