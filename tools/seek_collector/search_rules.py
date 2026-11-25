@@ -2,7 +2,7 @@
 import re
 
 LEVEL = re.compile(r"\b(?:senior|sr\.?|lead|principal|head|director|architect|mid[- ]?level|intermediate)\b", re.I)
-JUNIOR = re.compile(r"\b(?:junior|graduate|trainee|entry[- ]level|assistant|associate)\b", re.I)
+JUNIOR = re.compile(r"\b(?:junior|graduate|trainee|entry[- ]level|assistant|associate|interns?|internships?)\b", re.I)
 
 def title_parts(title):
     return [p.strip() for p in re.split(r"\s*[|/]\s*", title or "") if p.strip()]

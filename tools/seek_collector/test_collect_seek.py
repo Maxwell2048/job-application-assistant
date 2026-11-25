@@ -346,6 +346,24 @@ class ExpandedSearchTests(unittest.TestCase):
         data['results']['totalCount'] = total
         return page(data)
 
+    def test_internship_lanes_add_vacation_work_type_and_count_as_junior(self):
+        from collect_seek import MODE_KEYWORDS, junior_evidence, lane_worktypes, search_plan, search_term
+        from search_rules import excluded_title
+        plan = search_plan('focused', MODE_KEYWORDS['focused'])
+        self.assertIn(('internship', 'ict'), plan)
+        self.assertIn(('intern', 'ict'), plan)
+        self.assertEqual(search_term('intern'), '"intern"')            # not "internal"
+        self.assertEqual(lane_worktypes('intern', '242,244'), '242,244,245')
+        self.assertEqual(lane_worktypes('internship', '242'), '242,245')
+        self.assertEqual(lane_worktypes('internship', '242,245'), '242,245')
+        self.assertEqual(lane_worktypes('graduate', '242,244'), '242,244')
+        url = search_url('internship', 1, lane_worktypes('internship', '242,244'))
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)['worktype'], ['242,244,245'])
+        self.assertTrue(junior_evidence('Data Analyst Intern', ''))
+        self.assertTrue(junior_evidence('Software Developer', 'This paid internship opportunity runs for 12 weeks.'))
+        self.assertFalse(junior_evidence('Software Engineer (Internal Tools)', ''))
+        self.assertFalse(excluded_title('Senior Engineer Intern', r'engineer'))
+
     def test_expanded_queries_and_remote_validation(self):
         from collect_seek import search_plan
         plan = search_plan('focused', ['graduate', 'data analyst'])

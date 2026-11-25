@@ -2,7 +2,8 @@
 
 Expanded focused mode searches level and role keywords across Perth categories
 and nationwide remote roles; broad also includes the whole Perth ICT classification. Both cover the
-work types in --worktypes (default full time and contract/temp). Cards whose
+work types in --worktypes (default full time and contract/temp); the internship
+lanes also cover casual/vacation, where vacation programmes are listed. Cards whose
 subclassification or title rules them out are dropped before any detail page
 is fetched, and jobs listed in --known-ids are reported without re-reading
 their details.
@@ -70,7 +71,17 @@ BROWSER_TIMEOUT_SECONDS = 90          # one navigation, including any challenge 
 BROWSER_VIRTUAL_TIME_MS = 20000       # how long the browser may spend settling a page before dump-dom returns
 
 ROLE_KEYWORDS = ['software developer', 'data analyst', 'business intelligence', 'application support', 'service desk', 'test analyst', 'AI engineer', 'data engineer', 'project coordinator', 'machine learning', 'python developer', 'web developer', 'IT support', 'business analyst']
-MODE_KEYWORDS = {'focused': ['graduate', 'junior', 'entry level', 'trainee', *ROLE_KEYWORDS], 'broad': ['']}
+INTERN_KEYWORDS = ['internship', 'intern']
+MODE_KEYWORDS = {'focused': ['graduate', 'junior', 'entry level', 'trainee', *INTERN_KEYWORDS, *ROLE_KEYWORDS], 'broad': ['']}
+# Summer and vacation programmes are usually listed as Casual/Vacation, a work type the
+# default search leaves out; only the internship lanes add it.
+VACATION_WORKTYPE = '245'
+
+
+def lane_worktypes(keyword, worktypes):
+    if keyword in INTERN_KEYWORDS and VACATION_WORKTYPE not in worktypes.split(','):
+        return worktypes + ',' + VACATION_WORKTYPE
+    return worktypes
 
 def search_plan(mode, keywords, remote=True):
     # Interleave regional and remote lanes, rather than leaving remote until the end.
@@ -83,7 +94,7 @@ def search_plan(mode, keywords, remote=True):
             plan.append((keyword + ' remote', 'remote' if cross_category else 'remote_ict'))
     return plan
 # Quoted so SEEK matches the phrase, not each word; plain "graduate" also matches "postgraduate".
-QUOTED = {'graduate', 'entry level'}
+QUOTED = {'graduate', 'entry level', 'intern'}   # a quoted "intern" does not match "internal"
 WORKTYPES = '242,244'   # Full time, Contract/Temp
 EXCLUDED_SUBCLASSES = 'Management,Architects,Team Leaders,CTO/CIO'
 EXCLUDED_TITLE = r'\b(senior|sr\.?|lead|principal|manager|head|director|architect|mid[- ]?level|intermediate)\b'
@@ -111,7 +122,7 @@ def restricted_citizenship(text):
 
 
 def junior_evidence(title, jd):
-    term = r'\b(?:graduates?|junior|entry[ -]level)\b'
+    term = r'\b(?:graduates?|junior|entry[ -]level|interns?|internships?|vacation (?:program|programme|role)s?)\b'
     if re.search(term, title, re.I):
         return True
     for sentence in re.split(r'[;\n]|(?<=[.!?])\s+', jd):
@@ -444,7 +455,7 @@ def assess(job):
         job['eligibility_485'] = '疑似公民或PR限制，需复核原文'
     job['eligibility_evidence'] = '\n'.join(evidence)
     job['level_evidence'] = '\n'.join(s.strip() for s in jd.splitlines()
-        if re.search(r'\bgraduate\b|\bjunior\b|entry.level|\d+.{0,8}years.{0,30}experience', s, re.I))
+        if re.search(r'\bgraduate\b|\bjunior\b|entry.level|\binterns?(?:hips?)?\b|\d+.{0,8}years.{0,30}experience', s, re.I))
     reasons = []
     if not jd:
         reasons.append('尚未读取完整JD')
@@ -734,9 +745,10 @@ def run(args):
                 break
             page_budget -= 1
             cursor['next'] = (plan_index + 1) % len(plan)
-            url = search_url(keyword, page, args.worktypes, scope)
+            worktypes = lane_worktypes(keyword, args.worktypes)
+            url = search_url(keyword, page, worktypes, scope)
             try:
-                cards, total_pages, total_jobs = parse_search(fetch.get(url), keyword, args.worktypes, scope)
+                cards, total_pages, total_jobs = parse_search(fetch.get(url), keyword, worktypes, scope)
                 per_page = per_page or len(cards) or None
                 if total_jobs and per_page:   # the pager only shows nearby pages; the count is reliable
                     more = page * per_page < int(total_jobs)
@@ -770,7 +782,7 @@ def run(args):
                     read_pending()
                 print(f'{label} page {page}: {len(cards)} cards; {len(jobs)} kept, {len(filtered)} filtered', flush=True)
                 page_jobs = sorted((j for j in jobs.values() if j['job_id'] not in known and j['detail_status'] == '待处理'),
-                                   key=lambda j: not bool(re.search(r'\b(graduate|junior|entry[- ]level|trainee)\b', j['title'], re.I)))
+                                   key=lambda j: not bool(re.search(r'\b(graduate|junior|entry[- ]level|trainee|interns?|internships?)\b', j['title'], re.I)))
                 for job in (page_jobs[:max(budget, 0)] if not stopped else []):
                     budget -= 1
                     outcome = read_detail(fetch, job, errors)
@@ -949,7 +961,7 @@ if __name__ == '__main__':
     parser.add_argument('--refresh', action='store_true')
     parser.add_argument('--output', type=Path, default=ROOT / 'seek_output')
     parser.add_argument('--mode', choices=sorted(MODE_KEYWORDS), default='focused',
-                        help='focused: graduate/junior/entry level/trainee; broad: all ICT jobs in Perth')
+                        help='focused: graduate/junior/entry level/trainee/internship; broad: all ICT jobs in Perth')
     parser.add_argument('--keywords', type=lambda v: [k.strip() for k in v.split(',') if k.strip()], default=None,
                         help='comma-separated keywords, overriding the mode')
     parser.add_argument('--worktypes', default=WORKTYPES, help='SEEK work type ids (242 full time, 244 contract/temp)')

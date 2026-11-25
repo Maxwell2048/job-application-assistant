@@ -86,4 +86,7 @@ class Settings(BaseSettings):
     # constraint kinds that skip a job when rule and model both find them:
     # driver_licence, wwcc, shift_work, fixed_term
     fit_skip_constraints: list[str] = Field(default_factory=list)
+    fit_skip_student_only: bool = True         # internships for current students only, if rule and model agree
+    # langgraph: generation stages run as a LangGraph state graph; classic: the same stages in plain Python
+    generation_engine: str = Field(default="langgraph", pattern="^(langgraph|classic)$")
     profile_path: Path = PROJECT_ROOT / "experiences" / "profile.md"   # its 相关能力 lines are the known stack
