@@ -26,7 +26,7 @@ from local_llm import LLMError, build_llm, load_config
 from search_experience import read_sections
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-TAILOR_PROMPT_VERSION = "9"
+TAILOR_PROMPT_VERSION = "10"
 PROFILE_FILE = "profile.md"
 RESUME_ID = "RESUME"
 UNVERIFIED_MARK = re.compile(r"事实状态\s*[:：]\s*待核对")
@@ -591,6 +591,7 @@ JD 要求列表里 verdict=insufficient 的要求没有证据支持，不要在�
 可以强化动词、适度使用 clear、reliable、practical 这类平实的正面词，说明工作的实际价值；但不写 significantly improved、proven、expert 这类无法证实的程度或效果，不虚构质量提升、领导职责、独立所有权、商业规模或量化结果。提交次数和标注数量作为工作范围的补充，不作为能力描述的主体。
 新增本人确认技能（2026-10-23）：Hugging Face Transformers、Ollama、LoRA、模型微调；按 profile 自述引用，不推断微调规模或实际效果。
 技能展示偏好（2026-10-23）：技能清单不列 YOLO 系列；项目正文中有证据的 YOLO 训练描述仍保留。Harness Engineering、MCP（Model Context Protocol）为本人新确认的技能，只引用 profile 自述，不扩写为未提供证据的项目、年限或生产成果。
+LangChain、LangGraph 为本人确认技能（2026-11-25）：用于 Job Evidence RAG 的模型接入、检索和生成流程编排，可在该项目要点中按材料引用；不写 LangChain Agent、工具调用、LangSmith、多 Agent 或生产部署。
 简历正文不出现课程代码（CITS5505 之类），用 individual project / group project 等描述项目性质。
 材料里的“本人自述”“待核对”“无本人提交/无文件佐证”“没有模块分工”“旧简历与证据不符、已删除的功能”是内部核对记录，只用来决定怎么写归属，不写进简历和求职信：
 协助类工作写成 supported/assisted the team's … module；材料写明两人项目时写 co-developed … with a teammate，多人小组写 with the team（团队人数按材料，不得改写；同一项目的归属说明写一次即可，不要每条要点重复）；不写 self-reported、unverified、no personal commits、cannot be attributed 等核对用语，也不提旧简历的错误。

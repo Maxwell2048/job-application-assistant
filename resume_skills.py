@@ -12,6 +12,10 @@ LLM_TOOLING = "LLM Tooling: Hugging Face Transformers · Ollama · llama.cpp · 
 PREFERENCES = [(AI_ENGINEERING, ("harness", "mcp")),
                (MODEL_ADAPTATION, ("lora", "fine-tun")),
                (LLM_TOOLING, ("hugging face", "ollama"))]
+# Confirmed 2026-11-25 and cited from the profile (build_resume.frameworks_line), not
+# from the base resume, so it is grouped with the declared rows but never added on re-export.
+LLM_FRAMEWORKS = "LLM Frameworks: LangChain · LangGraph"
+DECLARED_GROUP = PREFERENCES + [(LLM_FRAMEWORKS, ("langchain", "langgraph"))]
 
 YOLO = re.compile(r"\bYOLO(?:v?\d+[a-z]*)?(?:\s*/\s*YOLO(?:v?\d+[a-z]*)?)*\b", re.I)
 
@@ -26,8 +30,8 @@ def clean_skill_text(text):
 
 def skill_priority(line):
     text = line["text"].lower()
-    return next((i for i, (_, markers) in enumerate(PREFERENCES)
-                 if all(marker in text for marker in markers)), len(PREFERENCES))
+    return next((i for i, (_, markers) in enumerate(DECLARED_GROUP)
+                 if all(marker in text for marker in markers)), len(DECLARED_GROUP))
 
 
 def has_ai_engineering(texts):
@@ -78,9 +82,9 @@ def order_by_jd(lines, jd_text, declared_first=False, research_last=False):
     together as one group (shown alongside each other, as the user asked) and
     move by their best line; ties keep the base resume's order, where the
     declared group comes last."""
-    declared = [l for l in lines if skill_priority(l) < len(PREFERENCES)]
+    declared = [l for l in lines if skill_priority(l) < len(DECLARED_GROUP)]
     declared.sort(key=skill_priority)
-    others = [l for l in lines if skill_priority(l) == len(PREFERENCES)]
+    others = [l for l in lines if skill_priority(l) == len(DECLARED_GROUP)]
     units = [(jd_relevance(l["text"], jd_text), i, [l]) for i, l in enumerate(others)]
     if declared:
         best = max(jd_relevance(l["text"], jd_text) for l in declared)
@@ -88,7 +92,7 @@ def order_by_jd(lines, jd_text, declared_first=False, research_last=False):
     if research_last:
         # Outside AI roles, equally relevant ML research rows follow the general ones.
         def demoted(group):
-            if skill_priority(group[0]) < len(PREFERENCES):
+            if skill_priority(group[0]) < len(DECLARED_GROUP):
                 return 200  # the declared AI tooling group goes last on a tie
             return 100 if group[0]["text"].split(":", 1)[0].strip().casefold() in RESEARCH_LABELS else 0
         units = [(score, pos + demoted(group), group) for score, pos, group in units]
