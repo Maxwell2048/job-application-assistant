@@ -207,6 +207,67 @@ ROWS = [
 ]
 
 
+JD_INTERN_STUDENTS = ("Data Analyst Intern\n\nOur 12-week summer internship is a paid role.\n"
+                      "You must be currently enrolled in a Bachelor or Master degree.\nStrong Excel and SQL.\n")
+JD_INTERN_GRADUATES = ("Software Engineering Intern\n\nOpen to current students and recent graduates.\n"
+                       "Python and Git.\n")
+
+
+class InternshipTests(unittest.TestCase):
+    def setUp(self):
+        self.settings = Settings(_env_file=None, config_path=Path("c.json"))
+
+    def gate(self, jd, title, answer, **settings):
+        llm = FakeLLM([], fit=[answer])
+        return screen.fit_gate(jd, title, llm, self.settings.model_copy(update=settings), KNOWN)
+
+    def test_enrolment_rule(self):
+        rule = screen.student_only_by_rule
+        self.assertIn("currently enrolled", rule(JD_INTERN_STUDENTS))
+        self.assertTrue(rule("Open to penultimate year students in IT."))
+        self.assertTrue(rule("You will return to university after the placement."))
+        self.assertTrue(rule("Applicants need at least one semester of study remaining."))
+        self.assertEqual(rule(JD_INTERN_GRADUATES), "")                     # graduates are accepted too
+        self.assertEqual(rule("You will mentor university students in our STEM outreach."), "")
+        self.assertEqual(rule("Our graduate program suits people who completed a degree."), "")
+
+    def test_internship_wording_counts_as_junior(self):
+        self.assertTrue(screen.junior_by_rule("Data Analyst Intern", ""))
+        self.assertTrue(screen.junior_by_rule("Analyst", "We are hiring interns for our data team."))
+        self.assertFalse(screen.junior_by_rule("Software Engineer (Internal Tools)", ""))
+
+    def test_student_only_skip_needs_rule_and_model(self):
+        quote = "You must be currently enrolled in a Bachelor or Master degree."
+        answer = fit_answer(level="junior", level_quote="Data Analyst Intern", role_family="data_ai",
+                            student_only=True, student_quote=quote)
+        result = self.gate(JD_INTERN_STUDENTS, "Data Analyst Intern", answer)
+        self.assertEqual(result["decision"], "skip")
+        self.assertTrue(any("目前在读" in s for s in result["skips"]))
+        self.assertEqual(result["student_quote"], quote)
+        # the model disagrees: a flag, not a skip
+        result = self.gate(JD_INTERN_STUDENTS, "Data Analyst Intern", {**answer, "student_only": False,
+                                                                      "student_quote": ""})
+        self.assertEqual(result["decision"], "run")
+        self.assertTrue(any("可能要求申请人目前在读" in f for f in result["flags"]))
+        # switched off: still only a flag
+        result = self.gate(JD_INTERN_STUDENTS, "Data Analyst Intern", answer, fit_skip_student_only=False)
+        self.assertEqual(result["decision"], "run")
+        self.assertTrue(any("可能要求申请人目前在读" in f for f in result["flags"]))
+
+    def test_internship_open_to_graduates_runs(self):
+        answer = fit_answer(level="junior", level_quote="Software Engineering Intern")
+        result = self.gate(JD_INTERN_GRADUATES, "Software Engineering Intern", answer)
+        self.assertEqual(result["decision"], "run")
+        self.assertFalse(any("在读" in f for f in result["flags"]))
+
+    def test_student_only_needs_a_verbatim_quote(self):
+        bad = fit_answer(student_only=True, student_quote="")
+        good = fit_answer(student_only=True, student_quote="You must be currently enrolled in a Bachelor or Master degree.")
+        llm = FakeLLM([], fit=[bad, good])
+        result = screen.fit_gate(JD_INTERN_STUDENTS, "Data Analyst Intern", llm, self.settings, KNOWN)
+        self.assertEqual(result["decision"], "skip")
+
+
 class FitTickTests(unittest.TestCase):
     def test_tick_skips_by_fit_and_notes_hints(self):
         with tempfile.TemporaryDirectory() as tmp:
