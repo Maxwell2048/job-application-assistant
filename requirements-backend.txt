@@ -5,3 +5,5 @@ sqlalchemy>=2,<3
 alembic>=1.13,<2
 pydantic-settings>=2,<3
 psycopg[binary]>=3.1,<4
+# Generation stages as a LangGraph state graph (RAG_GENERATION_ENGINE=langgraph, the default)
+langgraph>=1.2,<2
