@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">Job Application Assistant</title>
+  <desc id="desc">Evidence-grounded job applications, generated on your own machine. A job description becomes requirements, cited evidence and verdicts, then a resume, cover letter and interview preparation.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="0.55" stop-color="#0f1d2e"/>
+      <stop offset="1" stop-color="#0d2a2a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.85" cy="0.1" r="0.6">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 54px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #f8fafc; }
+      .tag { font: 400 23px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #cbd5e1; }
+      .chip { font: 600 17px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #e2e8f0; }
+      .note { font: 400 15px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #94a3b8; }
+    </style>
+  </defs>
+  <rect width="1280" height="320" rx="20" fill="url(#bg)"/>
+  <rect width="1280" height="320" rx="20" fill="url(#glow)"/>
+  <rect x="64" y="58" width="72" height="6" rx="3" fill="url(#accent)"/>
+  <text x="64" y="128" class="title">Job Application Assistant</text>
+  <text x="64" y="170" class="tag">Evidence-grounded job applications, generated on your own machine.</text>
+
+  <g transform="translate(64 214)">
+    <rect width="150" height="44" rx="22" fill="#111c2d" stroke="#334155"/>
+    <text x="75" y="28" text-anchor="middle" class="chip">Job description</text>
+    <text x="171" y="29" text-anchor="middle" class="chip" fill="#5eead4">→</text>
+    <rect x="192" width="148" height="44" rx="22" fill="#111c2d" stroke="#334155"/>
+    <text x="266" y="28" text-anchor="middle" class="chip">Requirements</text>
+    <text x="361" y="29" text-anchor="middle" class="chip" fill="#5eead4">→</text>
+    <rect x="382" width="186" height="44" rx="22" fill="#11302d" stroke="#2dd4bf"/>
+    <text x="475" y="28" text-anchor="middle" class="chip">Your cited evidence</text>
+    <text x="589" y="29" text-anchor="middle" class="chip" fill="#5eead4">→</text>
+    <rect x="610" width="112" height="44" rx="22" fill="#111c2d" stroke="#334155"/>
+    <text x="666" y="28" text-anchor="middle" class="chip">Verdicts</text>
+    <text x="743" y="29" text-anchor="middle" class="chip" fill="#5eead4">→</text>
+    <rect x="764" width="388" height="44" rx="22" fill="#132036" stroke="#60a5fa"/>
+    <text x="958" y="28" text-anchor="middle" class="chip">Resume · Cover letter · Interview prep</text>
+  </g>
+  <text x="64" y="292" class="note">Local model · Multilingual E5 retrieval · Verbatim-quote validation · FastAPI + React workbench</text>
+</svg>

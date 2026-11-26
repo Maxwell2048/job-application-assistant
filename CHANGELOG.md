@@ -21,6 +21,7 @@ so changes are grouped by date.
 
 ### Documentation
 
+- Both READMEs were redesigned in the style of widely used open-source projects. Each now opens with a banner (`assets/banner.svg`), CI, licence and stack badges, a one-line promise and the board screenshot. The body follows with a comparison against typical AI resume generators, a six-part highlights grid, side-by-side screenshots, a three-step quickstart, a top-down flow diagram, an illustrated verdict table built from the fictional example, key numbers, the tech stack and a roadmap. Reference material (configuration, backend settings, the command-line walkthrough, outputs, deployment, testing and layout) is kept in full in collapsible sections, as are the FAQ answers.
 - Both READMEs were rewritten around the questions a first-time reader asks: what this is, how to deploy it, how to use it. The technical explanation moved into an eight-stage table, screenshots and a documentation index. The source layout now lists all 24 root modules, including `quality_report.py`, `application_answer.py` and `resume_review.py`, which were previously undocumented.
 - Corrected the interpreter recommendation: the workflow is tested on Python 3.12 and CI also runs 3.13, so 3.11 is no longer described as recommended. Both language versions now describe the same clone-based setup.
 - Added measured resource use (virtual environment, E5 weights, frontend build), a five-question FAQ, and the table of `RAG_` backend settings.

@@ -1,86 +1,139 @@
-# Job Application Assistant
+<div align="center">
 
-**English** | [简体中文](README.zh-CN.md)
+<img src="assets/banner.svg" alt="Job Application Assistant: evidence-grounded job applications, generated on your own machine" width="100%">
 
-> Point it at a job description and your own project notes. Get back an evidence-linked matching report, a preparation plan, CV suggestions, a cover letter, an assembled resume and interview preparation — with every claim traced to a line you actually wrote.
+<p>
+  <a href="https://github.com/Maxwell2048/job-application-assistant/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/Maxwell2048/job-application-assistant/actions/workflows/tests.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2dd4bf"></a>
+  <img alt="Python 3.12 | 3.13" src="https://img.shields.io/badge/python-3.12%20%7C%203.13-3776AB?logo=python&amp;logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&amp;logoColor=white">
+  <img alt="React + TypeScript" src="https://img.shields.io/badge/React%20%2B%20TypeScript-20232A?logo=react&amp;logoColor=61DAFB">
+  <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&amp;logoColor=white">
+  <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-0f766e">
+</p>
 
-**24 modules** · 14 command-line tools · 27 API endpoints · 7 web pages · **518 tests** · FastAPI + React · SQLite or PostgreSQL
+<p><b>Every claim cites a line you actually wrote.</b><br>
+Point it at a job description and your own project notes. Get back a matching report, a preparation plan,<br>
+a tailored resume, a cover letter and interview preparation, each traced to verbatim evidence.</p>
 
-The interface and generated reports are in Chinese; your source material and job descriptions can be in Chinese or English.
+<p>
+  <a href="#-quickstart"><b>Quickstart</b></a> ·
+  <a href="#-how-it-works"><b>How it works</b></a> ·
+  <a href="#-screenshots"><b>Screenshots</b></a> ·
+  <a href="#-documentation"><b>Docs</b></a> ·
+  <a href="README.zh-CN.md"><b>简体中文</b></a>
+</p>
 
----
+<img src="assets/screenshots/board.png" alt="The job board: postings by status, with level, role family and evidence coverage" width="92%">
 
-## What is this?
+<sub>The job board on fictional demo data. The interface and generated reports are in Chinese; your material and job descriptions can be in Chinese or English.</sub>
 
-Resume generators write confident prose from nothing. This one refuses to. It retrieves from a private library of your own project records, asks a local model to judge each requirement against the retrieved text, and rejects any quotation that is not literally present in the source.
+</div>
 
-Four layers stack:
+<br>
 
-- **Evidence** — your notes, resumes and self-reported facts, chunked by heading and embedded with a multilingual E5 model. Section locations survive, so a citation points at the paragraph it came from.
-- **Judgement** — one verdict per requirement: `direct`, `related` or `insufficient`, each pinned to a verbatim quote. A processing failure is recorded as a failure, never as "no evidence".
-- **Generation** — preparation summaries, CV suggestions, cover letters, assembled resumes, interview questions and STAR answers. These can only use what the evidence layer supports.
-- **Workbench** — a local web board that collects postings, screens them against your location and work rights, queues runs, and tracks which resume version you actually sent where.
+## 🤔 Why this exists
 
-It is a local prototype for one person, not a hiring oracle:
+AI resume generators write confident prose from nothing. This one refuses to. It retrieves from a private library of **your own** project records, asks a local model to judge each requirement against what it found, and **rejects any quotation that is not literally in your source**.
 
-> Retrieval similarity is not a hiring probability. Missing evidence does not mean you lack a skill. Every generated document is a draft for human review.
+| | Typical AI resume generator | Job Application Assistant |
+|---|---|---|
+| Where claims come from | Whatever the model writes | Your notes, retrieved and quoted word for word |
+| An invented number or tool | Ends up in the resume | Rejected by a program check and retried |
+| Team work | Often becomes "I built…" | Personal and team sections are told apart; team-only citations are rejected |
+| A requirement you cannot meet | Papered over | Marked `insufficient` and listed as a gap to prepare |
+| Your data | Sent to a cloud API | Stays on your machine; the model runs on loopback |
+| What you can check | The final text | Every line links to the section and quote it came from |
 
-## What it looks like
+> [!NOTE]
+> Retrieval similarity is not a hiring probability, and missing evidence does not mean you lack a skill. Every generated document is a draft for you to review before sending.
 
-Every screenshot below runs on fictional demo data: no real postings, no personal material.
+## ✨ Highlights
 
-![The job board](assets/screenshots/board.png)
+<table>
+<tr>
+<td width="50%" valign="top">
 
-The board: every posting by status, with the screening verdict, the level and role family it was judged to be, and how many required conditions have direct evidence.
+### 🔎 Evidence retrieval
+Multilingual E5 search over your own Markdown and text notes. Chunks keep their headings, so every citation points at the paragraph it came from.
 
-![A generated job](assets/screenshots/job.png)
+</td>
+<td width="50%" valign="top">
 
-A generated job: the verbatim screening quote, per-requirement verdict counts, the documents it produced, the pre-send quality checks and the application-answer box.
+### ⚖️ Per-requirement verdicts
+`direct`, `related` or `insufficient` for each requirement, pinned to a verbatim quote. A processing failure is recorded as a failure, never as "no evidence".
 
-![Resume tracking](assets/screenshots/resume.png)
+</td>
+</tr>
+<tr>
+<td valign="top">
 
-Resume versions grouped by date, each with its own submitted state. Downloading a file does not mark it submitted.
+### 📝 Grounded drafting
+Tailored resume, cover letter, interview questions, STAR answers and application-form answers. Each can only use what the evidence supports.
 
-## Quickstart
+</td>
+<td valign="top">
 
-Check these before you start:
+### 🧭 Screening before you spend time
+Location and work-rights gate, seniority and fit checks, student-only detection and six role families. Roles that do not fit stop early, with the quote that decided it.
 
-| Requirement | Detail |
-|---|---|
-| Python 3.12 | The tested interpreter. CI also runs 3.13. |
-| Node 22 | Needed once, to build the frontend. |
-| A local model endpoint | Anything exposing an OpenAI-compatible `/v1/chat/completions`. No cloud account is required and none is used by default. |
-| ~2 GB free disk | Virtual environment (about 1.2 GB measured), E5 weights (470 MB) and the frontend build. |
-| Your current resume at `resume/base_resume.docx` | The web app and the assembly step read it. |
+</td>
+</tr>
+<tr>
+<td valign="top">
 
-### Option A — the web app (recommended)
+### 🖥️ A workbench, not a script
+FastAPI + React board with live stage progress, manual JD submission, scheduled collection, run history, a pre-send quality report and resume-version tracking.
+
+</td>
+<td valign="top">
+
+### 🔒 Private by design
+Runs against a local, OpenAI-compatible model. There is no cloud fallback, and LangSmith tracing is refused, because prompts contain your source text.
+
+</td>
+</tr>
+</table>
+
+## 📸 Screenshots
+
+All screenshots use fictional demo data: no real postings, no personal material.
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/job.png" alt="A generated job"></td>
+<td width="50%"><img src="assets/screenshots/resume.png" alt="Resume tracking"></td>
+</tr>
+<tr>
+<td><b>A generated job.</b> The verbatim screening quote, verdict counts per requirement, the documents produced, pre-send quality checks and the application-answer box.</td>
+<td><b>Resume tracking.</b> Versions grouped by date, each with its own submitted state. Downloading a file does not mark it submitted.</td>
+</tr>
+</table>
+
+## 🚀 Quickstart
+
+You need **Python 3.12** (CI also runs 3.13), **Node 22** once to build the frontend, and a **local model server** exposing an OpenAI-compatible `/v1/chat/completions` (for example llama.cpp or Ollama).
 
 ```powershell
 git clone https://github.com/Maxwell2048/job-application-assistant.git
 cd job-application-assistant
-Copy-Item config.local.example.json config.local.json   # then set model and base_url
-.\start.bat
+Copy-Item config.local.example.json config.local.json   # set "model" and "base_url"
+.\start.bat                                             # opens http://127.0.0.1:8000
 ```
 
-`start.bat` creates the virtual environment, installs backend requirements, builds the frontend once, applies database migrations and opens `http://127.0.0.1:8000`. It does not start your model server: start that separately, or set `RAG_MODEL_LAUNCHER` to a script that does and use the **启动** (Start) button on the board.
+`start.bat` creates the virtual environment, installs the backend, builds the frontend once, applies database migrations and opens the board. It does not start your model server: start that yourself, or set `RAG_MODEL_LAUNCHER` to a script that does and use the **启动** (Start) button. Put your current resume at `resume/base_resume.docx`.
 
-### Option B — the command line
+<details>
+<summary><b>Prefer the command line? Try the fictional sample first</b></summary>
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-Then try the fictional sample before touching real material:
-
-```powershell
 .\.venv\Scripts\python.exe search_experience.py --data examples/experiences --check
 .\.venv\Scripts\python.exe match_job.py --jd examples\junior_developer_jd.txt --data examples/experiences --config config.local.json --top-k 3
 ```
 
-`examples/experiences/demo_project.md` is fictional and must not be used as real application evidence. `--check` reads files without loading the model. The first real search downloads E5; add `--offline` once it is cached.
-
-### What each path gives you
+`examples/experiences/demo_project.md` is fictional and must not be used as real application evidence. `--check` reads the files without loading the model. The first real search downloads the E5 weights (470 MB); add `--offline` once they are cached.
 
 | | Web app | Command line |
 |---|---|---|
@@ -90,24 +143,52 @@ Then try the fictional sample before touching real material:
 | Static report viewer | ✅ built in | ✅ `build_site.py` |
 | Scriptable / batchable | partly | ✅ |
 
-## How it works
+</details>
+
+<details>
+<summary><b>Requirements and disk space</b></summary>
+
+| Item | Detail |
+|---|---|
+| Python | 3.12 tested, 3.13 in CI |
+| Node | 22, only to build the frontend |
+| Model | Any OpenAI-compatible endpoint; nothing is bundled or trained here |
+| Virtual environment | about 1.2 GB |
+| `intfloat/multilingual-e5-small` | 470 MB, runs on CPU |
+| Frontend dependencies | 84 MB at build time; the built app is 299 KB |
+
+</details>
+
+## 🧠 How it works
 
 ```mermaid
-flowchart TD
-    A[Private Markdown / TXT experiences] --> B[Sections and token windows]
-    B --> C[Multilingual E5 embeddings]
-    D[Job description] --> E[Local model requirement extraction]
-    E --> F[Schema and quotation checks]
-    F --> FG[Location and work-rights gate]
-    FG --> G[Retrieve candidate sections per requirement]
-    C --> G
-    G --> H[Local model evidence judgement]
-    H --> I[Candidate and quotation validation]
-    I --> J[Matching report and preparation summary]
-    I --> K[Source-linked application drafts]
-    L[Resume and self-reported profile] --> K
-    K --> M[Markdown / JSON / DOCX]
+flowchart TB
+    JD[Job description] --> EX[Extract requirements]
+    EX --> GATE{Location and<br>work-rights gate}
+    GATE -- blocked --> STOP[Stop with the deciding quote]
+    GATE -- passes --> RET[Retrieve sections<br>per requirement]
+    NOTES[(Your notes<br>Markdown / TXT)] --> EMB[E5 embeddings] --> RET
+    RET --> JUDGE[Local model verdict<br>+ verbatim quote]
+    JUDGE --> VAL[Program checks:<br>schema, IDs, quotes, numbers]
+    VAL --> REP[Report and<br>preparation plan]
+    VAL --> DRAFT[Resume · Cover letter<br>Interview prep]
+    DRAFT --> DOCX[Markdown / JSON / DOCX]
 ```
+
+**What a verdict looks like.** The fictional sample in `examples/` asks for Flask, SQL joins, Git, Docker and automated testing. The evidence file mentions the first three and not the last two, so a run is expected to come out like this:
+
+| Requirement | Verdict | Evidence |
+|---|---|---|
+| Python web applications with Flask | `direct` | "我负责使用 Python 和 Flask 实现预约创建与取消接口。" (`demo_project.md` › 后端开发) |
+| SQL joins and parameterized queries | `direct` | "我编写 SQL JOIN 查询，关联预约记录与房间信息，并用参数化查询处理输入。" |
+| Git and pull requests | `direct` | "我与三位组员通过 Git 分支和 Pull Request 协作。" |
+| Docker (preferred) | `insufficient` | No section mentions it; it is listed as something to prepare, not claimed |
+| Automated testing (preferred) | `insufficient` | Same |
+
+*This table illustrates the report format with the fictional sample. Your verdicts come from your own model run.*
+
+<details>
+<summary><b>The eight stages in detail</b></summary>
 
 | Stage | What it does |
 |---|---|
@@ -120,70 +201,73 @@ flowchart TD
 | 7. Draft | CV suggestions, cover letter, resume assembly, interview questions and STAR preparation. |
 | 8. Export | Word documents, previewed in your office software before sending. |
 
-The retriever prefers personal-contribution sections over derived CV/STAR wording when documents follow the project template. Vectors live in memory; there is no persistent vector database or embedding cache.
+The retriever prefers personal-contribution sections over derived CV/STAR wording when documents follow the project template. Vectors live in memory; there is no persistent vector database or embedding cache. The backend runs the stages as a LangGraph state graph by default; `RAG_GENERATION_ENGINE=classic` runs the same stages in plain Python, and parity tests require identical results ([docs/langchain-langgraph.md](docs/langchain-langgraph.md)).
 
-## What's inside
+</details>
 
-| Area | What you get |
+## 📊 By the numbers
+
+<table>
+<tr>
+<td align="center"><b>518</b><br><sub>Python tests</sub></td>
+<td align="center"><b>12</b><br><sub>frontend tests</sub></td>
+<td align="center"><b>2 OS × 2 Python</b><br><sub>CI matrix</sub></td>
+<td align="center"><b>27</b><br><sub>API endpoints</sub></td>
+<td align="center"><b>14</b><br><sub>command-line tools</sub></td>
+<td align="center"><b>13×</b><br><sub>faster board at 5,000 jobs</sub></td>
+</tr>
+</table>
+
+- **Tests:** 339 engine and CLI, 132 backend API and 47 collector tests, all on synthetic fixtures, plus frontend tests and a production build in CI.
+- **Scale:** with 5,000 jobs and 1,500 runs the board went from 5.7 s and 11,506 SQL statements to 0.43 s and 32 statements, after batch loading and a signature-keyed run-summary cache. See [docs/performance.md](docs/performance.md) and rerun it with `tools/perf/bench_list_api.py`.
+
+## 🏗️ Tech stack
+
+| Layer | Technology |
 |---|---|
-| Retrieval | Multilingual semantic search over your own Markdown and text, with section locations. |
-| Judgement | `direct` / `related` / `insufficient` per requirement, plus programmatic quote validation. |
-| Screening | Location and work-rights gate, fit gate, student-only and constraint checks, six job families (`security`, `ai`, `software`, `data`, `it`, `business`). |
-| Drafting | Preparation summaries, CV suggestions, cover letters, resume assembly, interview questions, STAR answers, application-form answers. |
-| Quality | A programmatic pre-send quality report per run: pass, worth a look, or problem. |
-| Web app | FastAPI + React board, job pages with live stage progress, manual JD submission, autopilot, run history, resume tracking, read-only settings. |
-| Collection | SEEK collector with focused and broad lanes, anti-bot refusal handling, and persisted pagination. |
-| Storage | SQLite by default, PostgreSQL via one environment variable, Alembic migrations, cached run summaries. |
-| Export | DOCX resumes and cover letters with company-led English filenames. |
+| Retrieval | `sentence-transformers`, `intfloat/multilingual-e5-small`, optional LangChain `InMemoryVectorStore` |
+| Model access | Any OpenAI-compatible local server (llama.cpp, Ollama, …) over HTTP or LangChain `ChatOpenAI`; JSON Schema output with bounded retries |
+| Orchestration | LangGraph state graph with checkpoints, or a plain Python flow |
+| Backend | FastAPI, SQLAlchemy, Alembic, SQLite or PostgreSQL, server-sent events |
+| Frontend | React, TypeScript, Vite |
+| Documents | python-docx export with company-led English file names |
+| Delivery | GitHub Actions on Ubuntu and Windows; `compose.yaml` for PostgreSQL, API and nginx |
 
-## Deployment
+## 🗺️ Roadmap
 
-### Local
+- [x] Evidence retrieval, per-requirement verdicts and verbatim-quote validation
+- [x] Grounded resume, cover letter, interview and application-answer drafting
+- [x] Web workbench with collection, screening, queueing and resume tracking
+- [x] LangChain and LangGraph behind switches, with parity tests
+- [x] List endpoints that stay fast as runs accumulate
+- [ ] A larger synthetic public evaluation corpus
+- [ ] Stronger checks that a quotation actually supports the claim it backs
+- [ ] Persistent embedding cache
+- [ ] Broader platform and model compatibility testing
 
-`start.bat` covers the whole flow on Windows. The manual equivalent:
+Unchecked items are planned improvements, not current guarantees.
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
-Push-Location frontend
-npm ci
-npm run build
-Pop-Location
-.\.venv\Scripts\python.exe -m backend.app.main        # API docs at /docs
-```
+## 📖 Reference
 
-To use a different port: `.\.venv\Scripts\python.exe -m backend.app.main --port 8010`.
-
-### Containers
-
-`compose.yaml` provides PostgreSQL, the API and an nginx frontend. Model inference stays on the host; create `config.docker.json` from the example and point it at the host endpoint. Published ports bind to loopback. The application has no authentication and is intended for local use. Container configuration is included; cloud deployment and production operations are not claimed.
-
-### Database
-
-SQLite is the default single-machine ledger at `state/rag.sqlite`. Set `RAG_DATABASE_URL` to use PostgreSQL. Schema changes are Alembic migrations:
-
-```powershell
-.\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini upgrade head
-```
-
-Back up an existing database before upgrading. Board and resume lists read cached run summaries from `run_summary_cache`, rebuilt only when a run directory's files change, so lists stay fast as runs accumulate. The table holds derived data and may be deleted at any time. See [docs/performance.md](docs/performance.md).
-
-## Usage
-
-### Web pages
+<details>
+<summary><b>Web pages</b></summary>
 
 | Page | What it does |
 |---|---|
-| Board | Every job by status, with the screening verdict, its verbatim quote and a "ready" column. |
+| Board | Every job by status, with the screening verdict, its verbatim quote and a "ready" column. Junior roles come first; mid and senior roles are folded below. |
 | Job | Live stage progress, rendered documents, Word downloads, and the location-gate evidence in a popup. |
 | Submit | Paste a JD by hand and run it immediately. Aborting a pasted-JD task removes its unfinished run directory and saved JD file. |
 | Autopilot | Manual collection rounds, mode switch, status and history. |
 | Runs | Run history, read only. |
-| Resume | Generated versions grouped by date, each with its own submitted/unsubmitted state. Downloading a file does not mark it submitted. |
+| Resume | Generated versions grouped by date, each with its own submitted/unsubmitted state. |
 | Settings | Read-only view of the effective configuration. |
 
 Progress arrives over server-sent events. One generation runs at a time because the local model has a single slot.
 
-### Command line walkthrough
+</details>
+
+<details>
+<summary><b>Command-line walkthrough</b></summary>
 
 Replace `YOUR_RUN_DIRECTORY` with the directory printed by the matching command:
 
@@ -207,16 +291,20 @@ $runDir = 'outputs\YOUR_RUN_DIRECTORY'
 .\.venv\Scripts\python.exe build_site.py
 ```
 
-### Save a job description
+Save a job description from the clipboard, a file or standard input:
 
 ```powershell
-# From the clipboard, a file, or standard input
 .\.venv\Scripts\python.exe add_jd.py
 .\.venv\Scripts\python.exe add_jd.py --file draft.txt
 .\.venv\Scripts\python.exe add_jd.py --stdin
 ```
 
-### Outputs
+`match_job.py` returns `0` for a completed matching stage, `1` for failed or partial processing, `2` for invalid arguments, and `3` when the location gate blocks the role. `tailor_cv.py`, `interview_prep.py` and `build_resume.py` return `0` when complete, `1` for partial output or a failed generation, and `2` when the input was unusable and nothing was written. The optional summary has a separate status.
+
+</details>
+
+<details>
+<summary><b>Outputs of a run</b></summary>
 
 Matching creates `outputs/<timestamp>-<suffix>/`:
 
@@ -236,13 +324,12 @@ Matching creates `outputs/<timestamp>-<suffix>/`:
 
 Extraction-only runs produce the extraction subset. Later generation may add numbered versions. Regenerating a summary updates `report.md` and `job_summary.json`; Word export can replace the DOCX associated with its selected Markdown input.
 
-### Exit codes
+</details>
 
-`match_job.py` returns `0` for a completed matching stage, `1` for failed or partial processing, `2` for invalid arguments, and `3` when the location gate blocks the role. `tailor_cv.py`, `interview_prep.py` and `build_resume.py` return `0` when complete, `1` for partial output or a failed generation, and `2` when the input was unusable and nothing was written. The optional summary has a separate status.
+<details>
+<summary><b>Configuration: <code>config.local.json</code></b></summary>
 
-## Configuration
-
-`config.local.json` is copied from the example and is never committed:
+Copied from the example and never committed:
 
 | Field | Meaning |
 | --- | --- |
@@ -259,11 +346,12 @@ Extraction-only runs produce the extraction subset. Later generation may add num
 | `adapter` | `openai_http` (plain HTTP) or `langchain_openai` (same request through LangChain's `ChatOpenAI`; schema checks, quote validation and retries unchanged). LangSmith tracing must stay off, because prompts contain your source text |
 | `retriever` | `native` (default) or `langchain` (the same E5 chunks in a LangChain `InMemoryVectorStore`, same ranking) |
 
-The backend runs generation as a LangGraph state graph by default (`RAG_GENERATION_ENGINE=langgraph`; `classic` runs the same stages in plain Python). See [docs/langchain-langgraph.md](docs/langchain-langgraph.md).
+The example includes a model-specific thinking-mode setting; remove or adapt it if your server does not support it. There is no automatic cloud fallback: the configured endpoint receives personal source text, so keep it local if local processing is required.
 
-The example includes a model-specific thinking-mode setting; remove or adapt it if your server does not support it. There is no automatic cloud fallback — the configured endpoint receives personal source text, so keep it local if local processing is required.
+</details>
 
-### Backend settings
+<details>
+<summary><b>Backend settings: <code>RAG_*</code> environment variables</b></summary>
 
 Every backend setting is an environment variable with the `RAG_` prefix, or a line in a root `.env` file:
 
@@ -277,9 +365,38 @@ Every backend setting is an environment variable with the `RAG_` prefix, or a li
 | `RAG_AUTOPILOT_ENABLED` | `false` | Scheduled collection at start-up |
 | `RAG_ALLOW_REMOTE` | `true` | Accept nationwide remote roles that permit working from WA |
 
-## Testing
+</details>
 
-CI runs synthetic engine tests and backend API tests on Ubuntu and Windows with Python 3.12 and 3.13, collector tests without live network requests, and frontend regression tests plus a production build. Frontend tests currently cover pure grouping and visibility logic; browser end-to-end coverage is not claimed.
+<details>
+<summary><b>Deployment: local, containers and database</b></summary>
+
+`start.bat` covers the whole flow on Windows. The manual equivalent:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
+Push-Location frontend
+npm ci
+npm run build
+Pop-Location
+.\.venv\Scripts\python.exe -m backend.app.main        # API docs at /docs; add --port 8010 for another port
+```
+
+`compose.yaml` provides PostgreSQL, the API and an nginx frontend. Model inference stays on the host; create `config.docker.json` from the example and point it at the host endpoint. Published ports bind to loopback. The application has no authentication and is intended for local use. Container configuration is included; cloud deployment and production operations are not claimed.
+
+SQLite is the default single-machine ledger at `state/rag.sqlite`. Set `RAG_DATABASE_URL` to use PostgreSQL. Schema changes are Alembic migrations:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini upgrade head
+```
+
+Back up an existing database before upgrading. Board and resume lists read cached run summaries from `run_summary_cache`, rebuilt only when a run directory's files change. The table holds derived data and may be deleted at any time.
+
+</details>
+
+<details>
+<summary><b>Testing</b></summary>
+
+CI runs synthetic engine tests and backend API tests on Ubuntu and Windows with Python 3.12 and 3.13, collector tests without live network requests, and frontend regression tests plus a production build. Frontend tests cover pure grouping, visibility and refresh logic; browser end-to-end coverage is not claimed.
 
 ```powershell
 python -X utf8 -m unittest discover -s tests -v
@@ -292,8 +409,6 @@ npm run build
 Pop-Location
 ```
 
-That is **518 Python test cases**: 339 engine and CLI, 132 backend API, 47 collector. All shipped tests use synthetic fixtures.
-
 ```powershell
 # Small public smoke evaluation: four fictional requirements, three with recall targets
 .\.venv\Scripts\python.exe tests/run_eval.py
@@ -303,54 +418,10 @@ That is **518 Python test cases**: 339 engine and CLI, 132 backend API, 47 colle
 
 The default evaluation uses `examples/experiences/` and `tests/public_eval_set.json`. It is a smoke check, not a model-accuracy benchmark. Mock tests validate software behaviour, not hiring success.
 
-## Resource use
+</details>
 
-Measured on the development machine:
-
-| Item | Size |
-|---|---|
-| Python virtual environment with dependencies | about 1.2 GB |
-| `intfloat/multilingual-e5-small` weights | 470 MB |
-| Frontend dependencies (build time only) | 84 MB |
-| Built frontend served by the backend | 299 KB |
-
-Embedding runs on CPU. Generation memory and speed depend entirely on the model and server you choose; this repository does not bundle or train one. The web app runs one generation at a time because the model has a single slot. The SQLite ledger stays small; the `run_summary_cache` table holds derived data and can be dropped at any time.
-
-## FAQ
-
-**The model endpoint is unreachable.** Check the server separately at `http://127.0.0.1:<port>/v1/models`, confirm `base_url` includes `/v1`, and put the full address in `config.local.json`. With `local_model_endpoints` set, the app tries each entry in order and uses the first one that reports a loaded model. The **启动** (Start) button only helps when `RAG_MODEL_LAUNCHER` points at a script that starts the server.
-
-**Port 8000 is already taken.** Start with another port — `.\.venv\Scripts\python.exe -m backend.app.main --port 8010` — and open `http://127.0.0.1:8010`.
-
-**The first run is slow and the network is busy.** The first search downloads the E5 weights (470 MB). Afterwards pass `--offline` on the CLI, or keep the cache and let the app use it. An air-gapped machine needs the model cache pre-populated.
-
-**A Word file looks different from the preview.** Appearance depends on fonts and the office software installed. Preview the export on the machine you will send from.
-
-**Does my material leave this machine?** Only the endpoint you configure receives source text. Keep it on loopback and nothing leaves. LangSmith tracing is refused on purpose for the same reason.
-
-## Data handling and public release
-
-Keep personal experiences, resumes, credentials, JDs, generated applications, screenshots and source-review notes private. Public examples must be fictional or explicitly approved.
-
-This application was developed inside a larger personal workspace. Ignore rules exclude private directories from **new** Git additions; they do not remove tracked files or erase old commits. Preparing this README does not make that workspace or its history suitable for publication. Prepare and review a separate source-only release before publishing.
-
-`make_public_release.py --out <directory>` copies an allowlist into a new or empty directory. Existing files are never overwritten or deleted; `--clean` is unsupported. Every copied text file, including the release script, is scanned for common secret formats. For personal identifiers, supply `--private-patterns <private-file.json>` with a JSON array of regex strings stored outside the release directory. This file is never copied. Automated checks cannot detect all personal data; manually review the output before publishing from a separate Git repository.
-
-Exclude `config.local.json`, `experiences/`, `resume/`, `_sources/`, `_review/`, `jobs/`, `outputs/`, and `site/`. Review older design notes for personal paths and examples.
-
-## Limitations
-
-- This is a local prototype, not a production multi-user service.
-- A valid quotation can still be misinterpreted; application claims require human review.
-- Top-K retrieval can miss evidence or return weak candidates. Similarity is only a ranking signal.
-- Context planning uses character-budget heuristics, not exact model token counts.
-- Numeric checks establish source presence, not correct experimental interpretation.
-- DOCX appearance depends on fonts and office software.
-- Source quality and personal/team ownership boundaries affect every generated result.
-- The system uses pretrained models; it does not train or fine-tune them.
-- The collector does not guarantee access to third-party listings and stops on refusal or rate limiting.
-
-## Project layout
+<details>
+<summary><b>Project layout</b></summary>
 
 ```text
 Root modules (24)
@@ -383,7 +454,7 @@ backend/                   FastAPI API, ledger (SQLAlchemy + Alembic), worker, a
 frontend/                  React + TypeScript app (Vite)
 tools/seek_collector/      SEEK collection, screening lanes, refusal handling
 tools/perf/                Scale benchmark for the list endpoints
-docs/                      Design notes (see below)
+docs/                      Design notes
 examples/                  Fictional demonstration inputs
 tests/                     Regression and evaluation tooling
 compose.yaml               PostgreSQL + API + nginx frontend
@@ -391,7 +462,9 @@ compose.yaml               PostgreSQL + API + nginx frontend
 
 `import_uwa_kb.py` is an optional importer for the original course-project knowledge-base format; it is not required for general use.
 
-## Documentation
+</details>
+
+## 📚 Documentation
 
 | Doc | Contents |
 |---|---|
@@ -401,14 +474,71 @@ compose.yaml               PostgreSQL + API + nginx frontend
 | [docs/jd_matcher_spec.md](docs/jd_matcher_spec.md) | Matching specification: inputs, stages, outputs, guarantees |
 | [CHANGELOG.md](CHANGELOG.md) | Dated changes with links to commits and pull requests |
 
-## Contributing
+## ❓ FAQ
 
-Include a minimal fictional input, command, platform and Python version, and a credential-free model configuration in bug reports. Do not attach private resumes or raw personal outputs.
+<details>
+<summary><b>The model endpoint is unreachable.</b></summary>
 
-Explain user-visible changes in pull requests, add meaningful regression tests, and run the relevant suites. Keep retrieval, model access, validation and rendering separate. Use synthetic content for layout previews.
+Check the server separately at `http://127.0.0.1:<port>/v1/models`, confirm `base_url` includes `/v1`, and put the full address in `config.local.json`. With `local_model_endpoints` set, the app tries each entry in order and uses the first one that reports a loaded model. The **启动** (Start) button only helps when `RAG_MODEL_LAUNCHER` points at a script that starts the server.
 
-Roadmap: a larger synthetic public evaluation corpus, stronger checks that quotations actually support claims, persistent embedding caching, and broader platform and model compatibility testing. These are planned improvements, not current guarantees.
+</details>
 
-## License
+<details>
+<summary><b>Port 8000 is already taken.</b></summary>
+
+Start with another port, `.\.venv\Scripts\python.exe -m backend.app.main --port 8010`, and open `http://127.0.0.1:8010`.
+
+</details>
+
+<details>
+<summary><b>The first run is slow and the network is busy.</b></summary>
+
+The first search downloads the E5 weights (470 MB). Afterwards pass `--offline` on the CLI, or keep the cache and let the app use it. An air-gapped machine needs the model cache pre-populated.
+
+</details>
+
+<details>
+<summary><b>A Word file looks different from the preview.</b></summary>
+
+Appearance depends on fonts and the office software installed. Preview the export on the machine you will send from.
+
+</details>
+
+<details>
+<summary><b>Does my material leave this machine?</b></summary>
+
+Only the endpoint you configure receives source text. Keep it on loopback and nothing leaves. LangSmith tracing is refused on purpose for the same reason.
+
+</details>
+
+## ⚠️ Limitations
+
+- A local prototype for one person, not a production multi-user service.
+- A valid quotation can still be misinterpreted; application claims need human review.
+- Top-K retrieval can miss evidence or return weak candidates. Similarity is only a ranking signal.
+- Context planning uses character-budget heuristics, not exact model token counts.
+- Numeric checks establish source presence, not correct experimental interpretation.
+- DOCX appearance depends on fonts and office software.
+- Source quality and personal/team ownership boundaries affect every generated result.
+- The system uses pretrained models; it does not train or fine-tune them.
+- The collector does not guarantee access to third-party listings and stops on refusal or rate limiting.
+
+## 🔐 Data handling and public release
+
+Keep personal experiences, resumes, credentials, JDs, generated applications, screenshots and source-review notes private. Public examples must be fictional or explicitly approved.
+
+This application was developed inside a larger personal workspace. Ignore rules exclude private directories from **new** Git additions; they do not remove tracked files or erase old commits. Prepare and review a separate source-only release before publishing.
+
+`make_public_release.py --out <directory>` copies an allowlist into a new or empty directory. Existing files are never overwritten or deleted; `--clean` is unsupported. Every copied text file, including the release script, is scanned for common secret formats. For personal identifiers, supply `--private-patterns <private-file.json>` with a JSON array of regex strings stored outside the release directory; this file is never copied. Automated checks cannot detect all personal data, so review the output before publishing from a separate Git repository. Exclude `config.local.json`, `experiences/`, `resume/`, `_sources/`, `_review/`, `jobs/`, `outputs/` and `site/`.
+
+## 🤝 Contributing
+
+Bug reports should include a minimal fictional input, the command, platform and Python version, and a credential-free model configuration. Do not attach private resumes or raw personal outputs.
+
+In pull requests, explain user-visible changes, add meaningful regression tests and run the relevant suites. Keep retrieval, model access, validation and rendering separate. Use synthetic content for layout previews.
+
+## 📄 License
 
 MIT License, see [LICENSE](LICENSE). Model and dependency licenses remain separate.
+
+<div align="center"><sub>Built for job seekers who would rather send fewer, truer applications.</sub></div>
