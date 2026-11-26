@@ -26,6 +26,7 @@ so changes are grouped by date.
 - Added measured resource use (virtual environment, E5 weights, frontend build), a five-question FAQ, and the table of `RAG_` backend settings.
 - Repository metadata: the description now states the concrete capabilities, and the topic tags follow the actual stack. `flask` was never used; the backend is FastAPI.
 - Three screenshots of the running app (the board, a generated job page, resume tracking) were rendered from a synthetic dataset — nine fictional postings and two fictional runs in a separate database — and are included under `assets/screenshots/`. `make_public_release.py` copies `assets/` as part of the allowlist so a future release keeps them.
+- The author's real name was removed from both READMEs and from the copyright line in `LICENSE`; the account handle is used instead.
 
 ## 2026-11-25
 
