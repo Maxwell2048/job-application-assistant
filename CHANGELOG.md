@@ -19,6 +19,14 @@ so changes are grouped by date.
 
 - `tools/perf/bench_list_api.py`, a scale benchmark on synthetic data that reports timings and SQL statement counts. New regression tests require the board and resume list to issue the same number of statements for 3 jobs as for 43.
 
+### Documentation
+
+- Both READMEs were rewritten around the questions a first-time reader asks: what this is, how to deploy it, how to use it. The technical explanation moved into an eight-stage table, screenshots and a documentation index. The source layout now lists all 24 root modules, including `quality_report.py`, `application_answer.py` and `resume_review.py`, which were previously undocumented.
+- Corrected the interpreter recommendation: the workflow is tested on Python 3.12 and CI also runs 3.13, so 3.11 is no longer described as recommended. Both language versions now describe the same clone-based setup.
+- Added measured resource use (virtual environment, E5 weights, frontend build), a five-question FAQ, and the table of `RAG_` backend settings.
+- Repository metadata: the description now states the concrete capabilities, and the topic tags follow the actual stack. `flask` was never used; the backend is FastAPI.
+- Three screenshots of the running app (the board, a generated job page, resume tracking) were rendered from a synthetic dataset — nine fictional postings and two fictional runs in a separate database — and are included under `assets/screenshots/`. `make_public_release.py` copies `assets/` as part of the allowlist so a future release keeps them.
+
 ## 2026-11-25
 
 ### Added
