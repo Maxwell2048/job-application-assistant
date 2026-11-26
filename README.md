@@ -6,7 +6,7 @@
 
 **24 modules** · 14 command-line tools · 27 API endpoints · 7 web pages · **518 tests** · FastAPI + React · SQLite or PostgreSQL
 
-Built and maintained by **[Bomin Liao](https://github.com/Maxwell2048)**. The interface and generated reports are in Chinese; your source material and job descriptions can be in Chinese or English.
+The interface and generated reports are in Chinese; your source material and job descriptions can be in Chinese or English.
 
 ---
 
