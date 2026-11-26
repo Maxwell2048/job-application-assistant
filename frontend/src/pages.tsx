@@ -6,7 +6,7 @@ import {
   VERDICT_LABEL,
 } from './components'
 import { useLoader } from './hooks'
-import { isArchivedJob } from './jobVisibility'
+import { COLLAPSED_LEVELS, fitLevel, isArchivedJob, isCollapsedLevel } from './jobVisibility'
 
 const MODE_LABEL: Record<SearchMode, string> = { focused: '定向搜索', broad: '扩展搜索' }
 const MODE_HINT: Record<SearchMode, string> = {
@@ -83,28 +83,14 @@ export function Board({ jobs, archivedJobs, onOpen, version, onToast, onChanged 
   return (
     <>
       <h1>岗位看板</h1>
-      <p className="sub">每个岗位从被发现到生成材料的位置。“可投 / 待生成”是筛选通过、还没生成材料的岗位；“已生成”按生成日期分组，同一天内按入职条件的证据覆盖排序。点卡片看详情、原句和文件。</p>
+      <p className="sub">初级岗位在前：每个岗位从被发现到生成材料的位置。“可投 / 待生成”是筛选通过、还没生成材料的初级和未定级岗位；“已生成”按生成日期分组，同一天内按入职条件的证据覆盖排序。中级和高级岗位折叠在页面下方。点卡片看详情、原句和文件。</p>
       <div className="row" style={{ marginTop: 0, marginBottom: 14 }}>
         <input type="text" placeholder="搜索公司、岗位、地点" value={query} onChange={(e) => setQuery(e.target.value)} style={{ maxWidth: 360 }} />
         <span className="msg">{filtered.length} / {jobs.length} 个岗位 · 更新 {version}</span>
       </div>
-      <div className="row" style={{ alignItems: 'flex-start', marginBottom: 16 }}>
-        {(['mid', 'senior'] as const).map((level) => {
-          const items = filtered.filter(j => j.status === 'ready' && j.screening?.rule_result.fit?.level === level)
-          const archived = archivedJobs.filter(j => j.status === 'screened_out' && !j.note?.includes('手动跳过') && j.screening?.rule_result.fit?.level === level && (!query.trim() || `${j.title} ${j.company} ${j.location}`.toLowerCase().includes(query.trim().toLowerCase())))
-          return <section className="card" style={{ flex: 1, minWidth: 240 }} key={level}>
-            <h2>{level === 'mid' ? '中级岗位' : '高级岗位'} · {items.length}</h2>
-            <button className="btn mini" disabled={!items.length} onClick={() => generateAll(level)}>生成全部{level === 'mid' ? '中级' : '高级'}岗位</button>
-            {items.map(j => <JobCard key={j.id} job={j} onOpen={onOpen} />)}
-            {archived.length > 0 && <details><summary>已筛掉，需逐个查看原因（{archived.length}）</summary>
-              <p className="msg">可能还有其他筛选原因；打开详情可自行选择是否生成。</p>
-              {archived.map(j => <JobCard key={j.id} job={j} onOpen={onOpen} />)}</details>}
-          </section>
-        })}
-      </div>
       <div className="board">
         {COLUMNS.map((col) => {
-          const items = filtered.filter((j) => col.statuses.includes(j.status) && (!col.statuses.includes('ready') || !['mid', 'senior'].includes(j.screening?.rule_result.fit?.level ?? '')))
+          const items = filtered.filter((j) => col.statuses.includes(j.status) && (!col.statuses.includes('ready') || !isCollapsedLevel(j)))
           if (col.statuses.includes('ready')) items.sort((a, b) => readyRank(a) - readyRank(b) || a.id - b.id)
           const noJd = col.statuses.includes('new') ? filtered.filter((j) => j.status === 'no_jd') : []
           if (col.statuses.includes('done')) {
@@ -120,7 +106,7 @@ export function Board({ jobs, archivedJobs, onOpen, version, onToast, onChanged 
             <div key={col.key} className="column">
               <h3>{col.key}<span>{items.length}</span></h3>
               {col.statuses.includes('ready') && items.length > 0 && (
-                <button className="btn mini" style={{ marginBottom: 10 }} onClick={() => generateAll()}>▶ 生成非中高级岗位（{items.length}）</button>
+                <button className="btn mini" style={{ marginBottom: 10 }} onClick={() => generateAll()}>▶ 生成初级和未定级岗位（{items.length}）</button>
               )}
               {col.statuses.includes('done') ? <>
                 <a className="date-view-link" href="#/resumes">按日期管理投递 →</a>
@@ -140,6 +126,22 @@ export function Board({ jobs, archivedJobs, onOpen, version, onToast, onChanged 
               )}
             </div>
           )
+        })}
+      </div>
+      <h2 className="level-fold-title">中级和高级岗位<span>默认折叠，点标题展开</span></h2>
+      <div className="level-folds">
+        {COLLAPSED_LEVELS.map((level) => {
+          const items = filtered.filter(j => j.status === 'ready' && fitLevel(j) === level)
+          const archived = archivedJobs.filter(j => j.status === 'screened_out' && !j.note?.includes('手动跳过') && fitLevel(j) === level && (!query.trim() || `${j.title} ${j.company} ${j.location}`.toLowerCase().includes(query.trim().toLowerCase())))
+          const label = level === 'mid' ? '中级' : '高级'
+          return <details className="card level-fold" key={level}>
+            <summary>{label}岗位<span>{items.length} 个可投{archived.length > 0 ? ` · ${archived.length} 个已筛掉` : ''}</span></summary>
+            <button className="btn mini" disabled={!items.length} onClick={() => generateAll(level)}>生成全部{label}岗位</button>
+            {items.map(j => <JobCard key={j.id} job={j} onOpen={onOpen} />)}
+            {archived.length > 0 && <details><summary>已筛掉，需逐个查看原因（{archived.length}）</summary>
+              <p className="msg">可能还有其他筛选原因；打开详情可自行选择是否生成。</p>
+              {archived.map(j => <JobCard key={j.id} job={j} onOpen={onOpen} />)}</details>}
+          </details>
         })}
       </div>
     </>

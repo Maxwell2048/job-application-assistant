@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Health, type Job, type Task } from './api'
+import { coalesce } from './coalesce'
 import { Badge, STATUS_LABEL, Stepper } from './components'
 import { useEvents, useRoute, useToast } from './hooks'
 import { ResumePage } from './ResumePage'
@@ -19,12 +20,17 @@ export default function App() {
   const [version, setVersion] = useState(0)
   const [toast, showToast] = useToast()
 
+  // Server events can arrive in bursts while jobs are screened or generated;
+  // coalescing keeps at most one board refresh in flight plus one follow-up.
+  const loadAll = useMemo(() => coalesce(() => Promise.all([
+    api.health().then(setHealth).catch(() => setHealth(null)),
+    api.jobs().then(setJobs).catch(() => undefined),
+    api.tasks().then(setTasks).catch(() => undefined),
+  ])), [])
   const refresh = useCallback(() => {
-    api.health().then(setHealth).catch(() => setHealth(null))
-    api.jobs().then(setJobs).catch(() => undefined)
-    api.tasks().then(setTasks).catch(() => undefined)
+    void loadAll()
     setVersion((v) => v + 1)
-  }, [])
+  }, [loadAll])
   useEffect(refresh, [refresh])
   useEffect(() => {
     const timer = window.setInterval(() => api.health().then(setHealth).catch(() => setHealth(null)), 15000)

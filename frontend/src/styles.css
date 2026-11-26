@@ -225,3 +225,14 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .excluded-results summary span { font-weight: 400; margin-left: 12px; }
 .collector-results .table-scroll { max-height: 390px; }
 .collector-results th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+/* Mid and senior roles: folded below the junior board */
+.level-fold-title { margin: 28px 0 10px; font-size: 15px; display: flex; align-items: baseline; gap: 10px; }
+.level-fold-title span { font-size: 12px; font-weight: 400; color: var(--muted); }
+.level-folds { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; align-items: start; }
+.level-fold > summary { cursor: pointer; font-weight: 600; display: flex; align-items: baseline; gap: 8px; list-style: none; }
+.level-fold > summary::-webkit-details-marker { display: none; }
+.level-fold > summary::before { content: "▸"; color: var(--accent); }
+.level-fold[open] > summary::before { content: "▾"; }
+.level-fold > summary span { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--muted); }
+.level-fold[open] > summary { margin-bottom: 12px; }

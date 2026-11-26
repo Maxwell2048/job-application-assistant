@@ -1,6 +1,7 @@
 """Ingest collected jobs into the ledger: dedupe by (source, external id),
 notice changed JDs, recognise reposts, keep the JD text on disk."""
 import hashlib
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -76,14 +77,23 @@ def relink_jd_files(session_factory, jobs_dir):
     """JD paths are stored whole; after the project folder moves (D: to E:, say)
     they point nowhere. Re-point each missing one to the file of the same name
     in jobs_dir when it is there. -> the number re-linked."""
+    jobs_dir = Path(jobs_dir)
+    try:   # one directory listing instead of a stat per job: this runs at every start-up
+        present = {entry.name for entry in os.scandir(jobs_dir) if entry.is_file()}
+    except OSError:
+        present = set()
+    home = os.path.normcase(os.path.abspath(jobs_dir))
     fixed = 0
     with session_factory() as session:
-        for job in session.scalars(select(Job).where(Job.jd_path != "")).all():
-            if Path(job.jd_path).is_file():
-                continue
-            candidate = Path(jobs_dir) / PureWindowsPath(job.jd_path).name   # either separator
-            if candidate.is_file():
-                job.jd_path = str(candidate)
+        for job_id, jd_path in session.execute(select(Job.id, Job.jd_path).where(Job.jd_path != "")).all():
+            name = PureWindowsPath(jd_path).name                              # either separator
+            if os.path.normcase(os.path.dirname(os.path.abspath(jd_path))) == home and name in present:
+                continue                                                      # already in jobs_dir
+            if Path(jd_path).is_file():
+                continue                                                      # kept elsewhere on purpose
+            if name in present:
+                session.get(Job, job_id).jd_path = str(jobs_dir / name)
                 fixed += 1
-        session.commit()
+        if fixed:
+            session.commit()
     return fixed

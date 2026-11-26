@@ -17,7 +17,7 @@ INCLUDE_FILES = [
     "README.md", "README.zh-CN.md", "CHANGELOG.md", "LICENSE", "requirements.txt", "requirements-test.txt",
     ".github/workflows/tests.yml", "config.local.example.json",
     "project_template.md", "start.bat", "make_public_release.py", ".env.example",
-    "requirements-backend.txt", "requirements-collector.txt", "docs/application-workflow.md", "docs/langchain-langgraph.md", "Dockerfile.api", ".dockerignore", "compose.yaml", ".github/workflows/tests.yml",
+    "requirements-backend.txt", "requirements-collector.txt", "docs/application-workflow.md", "docs/langchain-langgraph.md", "docs/performance.md", "Dockerfile.api", ".dockerignore", "compose.yaml", ".github/workflows/tests.yml",
     "frontend/package.json", "frontend/package-lock.json", "frontend/index.html", "frontend/vite.config.ts",
     "frontend/tsconfig.json", "frontend/tsconfig.app.json", "frontend/tsconfig.node.json", "frontend/.gitignore",
     "frontend/.oxlintrc.json", "frontend/Dockerfile", "frontend/.dockerignore", "frontend/nginx.conf",
@@ -43,7 +43,7 @@ INCLUDE_TESTS = [
     "test_quality_fixes.py", "test_assembly_recovery.py", "test_llm_structured_output.py", "test_langchain_integration.py",
 ]
 # Whole directories copied file by file (caches and compiled files skipped).
-INCLUDE_DIRS = ["backend", "frontend/src", "frontend/tests", "tools/seek_collector"]
+INCLUDE_DIRS = ["backend", "frontend/src", "frontend/tests", "tools/seek_collector", "tools/perf"]
 SKIP_DIR_NAMES = {".git", ".seek_cache", "seek_output", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules", "dist"}
 KEEP_DIRS = ["experiences", "resume", "jobs", "outputs", "state"]
 

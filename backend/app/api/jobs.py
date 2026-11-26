@@ -6,14 +6,14 @@ import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from ..core import paths  # noqa: F401
 import add_jd
 from ..db.models import Job, RagRun, Screening, Task as TaskRow, ResumeApplication
 from ..services.ledger import ingest
 from ..services.runs import run_summary, annotate_application
-from .deps import get_session, get_settings, get_worker
+from .deps import get_run_index, get_session, get_settings, get_worker
 from .schemas import DecisionIn, JobDetailOut, JobOut, ScreeningStartedOut, SubmitJobIn, SupplementJdIn, TaskOut
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -27,32 +27,64 @@ def _screening(job):
             "rule_result": latest.rule_result or {}, "created_at": latest.created_at}
 
 
-def _runs(job, outputs_dir):
+def _missing_run(run):
+    return {"run_id": run.run_id, "run_status": run.run_status, "counts": run.counts, "docs": [],
+            "downloads": run.files, "can_interview": False, "has_resume": False, "missing": True}
+
+
+def _runs(job, outputs_dir, summaries=None, applications=None):
+    """The job's runs, newest first. A list page passes summaries (from the run
+    index) and applications loaded for the whole page; a single job reads its own."""
+    session = object_session(job)
     out = []
     for run in sorted(job.runs, key=lambda r: r.created_at, reverse=True):
-        run_dir = Path(outputs_dir) / run.run_id
-        summary = (run_summary(run_dir) if run_dir.is_dir() else
-                   {"run_id": run.run_id, "run_status": run.run_status, "counts": run.counts, "docs": [],
-                    "downloads": run.files, "can_interview": False, "has_resume": False, "missing": True})
-        session = object_session(job)
-        out.append(annotate_application(summary, session.get(ResumeApplication, run.run_id) if session else None))
+        if summaries is not None:
+            summary = summaries.get(run.run_id) or _missing_run(run)
+        else:
+            run_dir = Path(outputs_dir) / run.run_id
+            summary = run_summary(run_dir) if run_dir.is_dir() else _missing_run(run)
+        if applications is not None:
+            record = applications.get(run.run_id)
+        else:
+            record = session.get(ResumeApplication, run.run_id) if session else None
+        out.append(annotate_application(summary, record))
     return out
 
 
-def job_out(job, outputs_dir):
+def job_out(job, outputs_dir, summaries=None, applications=None):
     return JobOut(id=job.id, source=job.source, external_id=job.external_id, title=job.title, company=job.company,
                   url=job.url, location=job.location, work_type=job.work_type, listed_at=job.listed_at,
                   first_seen=job.first_seen, last_seen=job.last_seen, status=job.status, repost_of=job.repost_of,
-                  note=job.note, jd_path=job.jd_path, screening=_screening(job), runs=_runs(job, outputs_dir))
+                  note=job.note, jd_path=job.jd_path, screening=_screening(job),
+                  runs=_runs(job, outputs_dir, summaries, applications))
+
+
+def applications_for(session, run_ids, chunk=500):
+    """{run_id: ResumeApplication} for these runs, in a few queries rather than one per run."""
+    run_ids = list(dict.fromkeys(run_ids))
+    found = {}
+    for start in range(0, len(run_ids), chunk):
+        part = run_ids[start:start + chunk]
+        found.update((row.run_id, row) for row in
+                     session.scalars(select(ResumeApplication).where(ResumeApplication.run_id.in_(part))))
+    return found
 
 
 @router.get("", response_model=list[JobOut])
 def list_jobs(status: str | None = Query(default=None), limit: int = Query(default=200, ge=1, le=1000), offset: int = Query(default=0, ge=0),
-              session: Session = Depends(get_session), settings=Depends(get_settings)):
-    query = select(Job).order_by(Job.last_seen.desc(), Job.id.desc()).offset(offset).limit(limit)
+              session: Session = Depends(get_session), settings=Depends(get_settings),
+              run_index=Depends(get_run_index)):
+    # Screenings and runs are loaded for the whole page in one query each
+    # (not one per job), and run summaries come from the run index.
+    query = (select(Job).options(selectinload(Job.screenings), selectinload(Job.runs))
+             .order_by(Job.last_seen.desc(), Job.id.desc()).offset(offset).limit(limit))
     if status:
         query = query.where(Job.status.in_(status.split(",")))
-    return [job_out(job, settings.outputs_dir) for job in session.scalars(query).all()]
+    jobs = session.scalars(query).all()
+    run_ids = [run.run_id for job in jobs for run in job.runs]
+    summaries = run_index.summaries(Path(settings.outputs_dir) / run_id for run_id in run_ids)
+    applications = applications_for(session, run_ids)
+    return [job_out(job, settings.outputs_dir, summaries, applications) for job in jobs]
 
 
 @router.post("/generate-ready", status_code=202)

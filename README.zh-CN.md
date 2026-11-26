@@ -176,6 +176,8 @@ Word 使用 A4 单栏、统一标题和间距、教育信息排版及页脚。�
 .\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini upgrade head
 ```
 
+看板和简历页用到的运行摘要缓存在 `run_summary_cache` 表里，只有运行目录里的文件变化时才重新生成，所以运行记录越来越多时列表依然很快。这张表只存派生数据，可以随时删除。原因、测量结果和 `tools/perf/bench_list_api.py` 见 [docs/performance.md](docs/performance.md)。
+
 升级旧数据库前先备份。`compose.yaml` 提供 PostgreSQL、API 和 nginx 前端，模型保留在主机；先根据示例创建 `config.docker.json` 并适配主机地址。发布端口绑定回环地址。应用没有认证，供本机使用；仓库提供容器配置，不声称已经验证云端生产运行。
 
 ## 申请材料流程

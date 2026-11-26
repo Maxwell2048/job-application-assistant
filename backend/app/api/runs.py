@@ -1,5 +1,7 @@
 """Run directories: list, documents as HTML fragments, downloads."""
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,7 +16,8 @@ from job_identity import load_identity
 from tailor_cv import latest_output
 from ..services.runs import DOC_NAME, annotate_application, run_summary, safe_file, safe_run_dir
 from ..db.models import ResumeApplication, RagRun, Job
-from .deps import get_settings, get_session, get_worker
+from ..services.run_index import scan_run_dir
+from .deps import get_run_index, get_settings, get_session, get_worker
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -28,11 +31,21 @@ def _run_dir(settings, run_id):
 
 @router.get("")
 def list_runs(limit: int = Query(default=1000, ge=1, le=5000), resumes_only: bool = False,
-              settings=Depends(get_settings), session: Session = Depends(get_session)):
-    # Summary loading below reads the required files; avoid scanning them twice.
-    outputs = settings.outputs_dir
-    runs = ({"dir": path} for path in sorted(outputs.iterdir(), reverse=True)
-            if path.is_dir() and (path / "run_meta.json").is_file()) if outputs.is_dir() else ()
+              settings=Depends(get_settings), session: Session = Depends(get_session),
+              run_index=Depends(get_run_index)):
+    # One scandir per run directory both finds run_meta.json and signs the
+    # directory for the run index, which rebuilds only the summaries that changed.
+    outputs = Path(settings.outputs_dir)
+    listings = {}
+    if outputs.is_dir():
+        with os.scandir(outputs) as entries:
+            dirs = sorted((entry.name for entry in entries if entry.is_dir()), reverse=True)
+        for name in dirs:
+            listing = scan_run_dir(outputs / name)
+            if listing is not None and "run_meta.json" in listing.names:
+                listings[name] = listing
+    summaries = run_index.summaries((outputs / name for name in listings), listings)
+    runs = ({"dir": outputs / name} for name in listings)
     applications = {r.run_id: r for r in session.scalars(select(ResumeApplication)).all()}
     jobs = {r.run_id: j for r, j in session.execute(select(RagRun, Job).join(Job, RagRun.job_id == Job.id).options(selectinload(Job.screenings))).all()}
     # Resolve submission across the whole ledger before applying the response
@@ -46,7 +59,7 @@ def list_runs(limit: int = Query(default=1000, ge=1, le=5000), resumes_only: boo
                 submitted_jobs[job.id] = application
     results = []
     for run in runs:
-        summary = run_summary(run["dir"])
+        summary = summaries[run["dir"].name]
         if resumes_only and not summary["has_resume"]:
             continue
         job = jobs.get(summary["run_id"])

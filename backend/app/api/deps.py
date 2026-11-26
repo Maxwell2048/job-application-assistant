@@ -10,6 +10,10 @@ def get_worker(request: Request):
     return request.app.state.worker
 
 
+def get_run_index(request: Request):
+    return request.app.state.run_index
+
+
 def get_session(request: Request):
     session = request.app.state.session_factory()
     try:

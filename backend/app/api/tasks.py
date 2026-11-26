@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..db.models import Task as TaskRow
 from ..services.runs import run_summary
-from .deps import get_session, get_settings, get_worker
+from .deps import get_run_index, get_session, get_settings, get_worker
 from .schemas import TaskOut
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -20,12 +20,15 @@ def _with_run(task, outputs_dir):
 
 @router.get("", response_model=list[TaskOut])
 def list_tasks(limit: int = 50, session: Session = Depends(get_session), worker=Depends(get_worker),
-               settings=Depends(get_settings)):
+               settings=Depends(get_settings), run_index=Depends(get_run_index)):
     """Recent tasks: live ones from memory, older ones from the table."""
     live = {t.id: _with_run(t, settings.outputs_dir) for t in worker.tasks.values()}
     # Autopilot ticks are also task rows, but their "stages" hold a report; they have their own endpoint.
     rows = session.scalars(select(TaskRow).where(TaskRow.kind != "tick").order_by(TaskRow.created_at.desc())
                            .limit(limit)).all()
+    # Finished tasks' runs come from the run index; live ones above are read fresh.
+    summaries = run_index.summaries(settings.outputs_dir / row.run_id for row in rows
+                                    if row.run_id and row.id not in live)
     out = []
     for row in rows:
         if row.id in live:
@@ -34,9 +37,8 @@ def list_tasks(limit: int = 50, session: Session = Depends(get_session), worker=
         payload = {"id": row.id, "kind": row.kind, "jd_name": "", "job_id": row.job_id,
                    "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S"), "status": row.status,
                    "error": row.error or None, "run_id": row.run_id, "stages": row.stages or []}
-        run_dir = settings.outputs_dir / row.run_id if row.run_id else None
-        if run_dir is not None and run_dir.is_dir():
-            payload["run"] = run_summary(run_dir)
+        if row.run_id and row.run_id in summaries:
+            payload["run"] = summaries[row.run_id]
         out.append(payload)
     return list(live.values()) + out
 
