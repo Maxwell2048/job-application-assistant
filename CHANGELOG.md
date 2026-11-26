@@ -4,6 +4,21 @@ Notable changes to this project. The format follows [Keep a Changelog](https://k
 entries link to the commit or pull request that made the change. The project has no numbered releases yet,
 so changes are grouped by date.
 
+## 2026-11-26
+
+### Changed
+
+- The board, run list and resume list no longer slow down as jobs and runs accumulate. With 5,000 jobs and 1,500 runs on the measuring machine, the board fell from 5.7 s and 11,506 SQL statements to 0.4–1.1 s and 32 statements. The run and resume lists fell from about 3–4 s to under 0.7 s. Responses are unchanged. See [docs/performance.md](docs/performance.md).
+  - Screenings, runs and application status are batch-loaded for the whole page instead of one query per job or run.
+  - Run summaries come from a run index (`backend/app/services/run_index.py`). It is keyed by a signature of each run directory's files, held in memory and in the new `run_summary_cache` table, and rebuilt only for runs whose files changed.
+  - A new index, `ix_jobs_last_seen`, serves the board's sort order. Alembic revision `a20261126` adds it together with the cache table.
+  - Start-up JD relinking lists the jobs directory once, instead of checking every file separately.
+  - The page coalesces refreshes triggered by bursts of server events (`frontend/src/coalesce.ts`).
+
+### Added
+
+- `tools/perf/bench_list_api.py`, a scale benchmark on synthetic data that reports timings and SQL statement counts. New regression tests require the board and resume list to issue the same number of statements for 3 jobs as for 43.
+
 ## 2026-11-25
 
 ### Added

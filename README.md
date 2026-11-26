@@ -181,6 +181,8 @@ SQLite is the default single-machine ledger (`state/rag.sqlite`). Set `RAG_DATAB
 .\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini upgrade head
 ```
 
+Run summaries shown on the board and the resume list are cached in the `run_summary_cache` table and rebuilt only when a run directory's files change, so the lists stay fast as runs accumulate. The table holds derived data and may be deleted at any time. See [docs/performance.md](docs/performance.md) for causes, measurements and `tools/perf/bench_list_api.py`.
+
 Back up an existing database before upgrading. `compose.yaml` provides PostgreSQL, the API and nginx frontend; model inference remains on the host. Create `config.docker.json` from the example and adapt the host endpoint. Published ports bind to loopback. The application has no authentication and is intended for local use. Container configuration is included; cloud deployment and production operations are not claimed.
 
 ## Application workflow
