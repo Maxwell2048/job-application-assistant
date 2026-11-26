@@ -21,6 +21,7 @@ from .core.config import Settings
 from .db.session import create_schema, make_engine, make_session_factory
 from .services.autopilot import Autopilot
 from .services.ledger import relink_jd_files
+from .services.run_index import RunIndex
 from .services.worker import Worker
 
 PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>Job Evidence RAG API</title>
@@ -60,6 +61,7 @@ def create_app(settings: Settings | None = None, runner=None, autopilot_kwargs=N
     app.state.session_factory = session_factory
     app.state.worker = worker
     app.state.autopilot = autopilot
+    app.state.run_index = RunIndex(session_factory)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"],
                        allow_headers=["*"])
     for router in (system.router, jobs.router, tasks.router, runs.router, autopilot_api.router):

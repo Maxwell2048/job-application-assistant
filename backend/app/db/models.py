@@ -4,6 +4,7 @@ jobs        one row per job posting the system has seen, from any source
 screenings  what the eligibility screen concluded about a job, with its quote
 rag_runs    one row per generation run directory under outputs/
 tasks       the work queue and its history (full runs, interview prep, ticks)
+run_summary_cache  derived summaries of run directories, keyed by a file signature
 """
 from datetime import datetime, timezone
 
@@ -33,7 +34,7 @@ class Job(Base):
     work_type: Mapped[str] = mapped_column(String(100), default="")
     listed_at: Mapped[str] = mapped_column(String(40), default="")
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     jd_sha256: Mapped[str] = mapped_column(String(64), default="")
     jd_path: Mapped[str] = mapped_column(String(500), default="")
     # new -> screened_out | held | queued -> processing -> done | failed | blocked | cancelled ; expired
@@ -89,6 +90,17 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RunSummaryCache(Base):
+    """A run directory's summary, valid while its files keep the same signature
+    (services/run_index.py). Derived data: safe to delete at any time."""
+    __tablename__ = "run_summary_cache"
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    signature: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ResumeApplication(Base):

@@ -29,4 +29,10 @@ def make_session_factory(engine) -> sessionmaker[Session]:
 
 
 def create_schema(engine):
+    """Create missing tables, then missing indexes on tables that already existed:
+    create_all() adds an index only together with its table, so a ledger created
+    by an earlier version would never get indexes added to the models later."""
     Base.metadata.create_all(engine)
+    for table in Base.metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(engine, checkfirst=True)
