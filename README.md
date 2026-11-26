@@ -25,6 +25,22 @@ It is a local prototype for one person, not a hiring oracle:
 
 > Retrieval similarity is not a hiring probability. Missing evidence does not mean you lack a skill. Every generated document is a draft for human review.
 
+## What it looks like
+
+Every screenshot below runs on fictional demo data: no real postings, no personal material.
+
+![The job board](assets/screenshots/board.png)
+
+The board: every posting by status, with the screening verdict, the level and role family it was judged to be, and how many required conditions have direct evidence.
+
+![A generated job](assets/screenshots/job.png)
+
+A generated job: the verbatim screening quote, per-requirement verdict counts, the documents it produced, the pre-send quality checks and the application-answer box.
+
+![Resume tracking](assets/screenshots/resume.png)
+
+Resume versions grouped by date, each with its own submitted state. Downloading a file does not mark it submitted.
+
 ## Quickstart
 
 Check these before you start:

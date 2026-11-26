@@ -25,6 +25,7 @@ so changes are grouped by date.
 - Corrected the interpreter recommendation: the workflow is tested on Python 3.12 and CI also runs 3.13, so 3.11 is no longer described as recommended. Both language versions now describe the same clone-based setup.
 - Added measured resource use (virtual environment, E5 weights, frontend build), a five-question FAQ, and the table of `RAG_` backend settings.
 - Repository metadata: the description now states the concrete capabilities, and the topic tags follow the actual stack. `flask` was never used; the backend is FastAPI.
+- Three screenshots of the running app (the board, a generated job page, resume tracking) were rendered from a synthetic dataset — nine fictional postings and two fictional runs in a separate database — and are included under `assets/screenshots/`. `make_public_release.py` copies `assets/` as part of the allowlist so a future release keeps them.
 
 ## 2026-11-25
 
